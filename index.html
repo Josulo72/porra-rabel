@@ -81,9 +81,11 @@
       const { useEffect, useMemo, useRef, useState } = React;
 
       const STORAGE_KEY = 'porra_supervivencia_v1';
+      const API_BASE = 'https://script.google.com/macros/s/REEMPLAZAR_CON_TU_DEPLOY/exec';
       const ADMIN_KEY = 'porra_admin_visible';
       const ADMIN_SESSION_KEY = 'porra_admin_session_v1';
       const SCRAPE_MS = 45000;
+      const REMOTE_SYNC_MS = 900;
 
       const DEFAULT_MATCHES = [
         { id: 'm1', order: 1, homeTeam: 'Real Madrid', awayTeam: '', kickoff: '' },
@@ -194,11 +196,49 @@
         };
       };
 
+      const normalizeStateFromSource = (raw) => {
+        if (!raw || typeof raw !== 'object') return defaultState;
+
+        const matchesSource = Array.isArray(raw.matches) ? raw.matches : [];
+        const participantsSource = Array.isArray(raw.participants) ? raw.participants : [];
+
+        const matches = defaultState.matches.map((base, i) => {
+          const src = matchesSource[i] || {};
+          return {
+            id: base.id,
+            order: base.order,
+            homeTeam: String(src.homeTeam ?? base.homeTeam ?? ''),
+            awayTeam: String(src.awayTeam ?? base.awayTeam ?? ''),
+            kickoff: String(src.kickoff ?? base.kickoff ?? ''),
+            result: {
+              home: toIntOrNull(src.result?.home),
+              away: toIntOrNull(src.result?.away),
+            },
+            source: src.source === 'scraping' ? 'scraping' : 'manual',
+            lastUpdated: src.lastUpdated || null,
+          };
+        });
+
+        const participants = participantsSource.map((p) => ({
+          id: p.id || crypto.randomUUID(),
+          name: String(p.name || '').trim(),
+          predictions: [0, 1, 2].map((idx) => ({
+            home: toIntOrNull(p.predictions?.[idx]?.home),
+            away: toIntOrNull(p.predictions?.[idx]?.away),
+          })),
+        })).filter((p) => p.name);
+
+        return {
+          matches,
+          participants: participants.length ? participants : defaultState.participants,
+        };
+      };
+
       function App() {
         const [state, setState] = useState(() => {
           try {
             const raw = localStorage.getItem(STORAGE_KEY);
-            return raw ? JSON.parse(raw) : defaultState;
+            return raw ? normalizeStateFromSource(JSON.parse(raw)) : defaultState;
           } catch {
             return defaultState;
           }
@@ -226,11 +266,60 @@
           { home: '', away: '' },
         ]);
         const [submitMsg, setSubmitMsg] = useState('');
+        const [storageMode, setStorageMode] = useState('init');
         const previousScores = useRef({});
+        const saveTimer = useRef(null);
+
+        const sharedApiConfigured = () => API_BASE && !API_BASE.includes('REEMPLAZAR_CON_TU_DEPLOY');
+
+        const loadSharedState = async () => {
+          if (!sharedApiConfigured()) {
+            setStorageMode('local');
+            return;
+          }
+          try {
+            const res = await fetch(`${API_BASE}?action=getState`, { method: 'GET' });
+            if (!res.ok) throw new Error('No se pudo leer estado remoto');
+            const data = await res.json();
+            if (data?.state) setState(normalizeStateFromSource(data.state));
+            setStorageMode('shared');
+          } catch {
+            setStorageMode('local');
+            pushLog('Sin backend compartido: modo local');
+          }
+        };
+
+        const saveSharedState = async (nextState) => {
+          if (!sharedApiConfigured() || storageMode !== 'shared') return;
+          try {
+            await fetch(API_BASE, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'setState', state: nextState }),
+            });
+          } catch {
+            pushLog('Error guardando en backend compartido');
+          }
+        };
+
+        useEffect(() => {
+          loadSharedState();
+        }, []);
 
         useEffect(() => {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         }, [state]);
+
+        useEffect(() => {
+          if (storageMode !== 'shared') return;
+          if (saveTimer.current) clearTimeout(saveTimer.current);
+          saveTimer.current = setTimeout(() => {
+            saveSharedState(state);
+          }, REMOTE_SYNC_MS);
+          return () => {
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+          };
+        }, [state, storageMode]);
 
         useEffect(() => {
           localStorage.setItem(ADMIN_KEY, adminOpen ? '1' : '0');
@@ -671,6 +760,16 @@
                     }`}
                   />
                   <span className="text-slate-200">{scrapeStatus.text}</span>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 px-3 py-2 text-xs bg-slate-900/60">
+                  <span
+                    className={`inline-block w-3 h-3 rounded-full ${
+                      storageMode === 'shared'
+                        ? 'bg-lime-400 shadow-[0_0_10px_rgba(74,222,128,0.95)]'
+                        : 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.95)]'
+                    }`}
+                  />
+                  <span className="text-slate-200">{storageMode === 'shared' ? 'Datos compartidos: ON' : 'Datos compartidos: OFF'}</span>
                 </div>
               </div>
             </header>
