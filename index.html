@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>La Porra de Supervivencia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              slateDeep: '#0f172a',
+              neonBlue: '#38bdf8',
+              neonBlueSoft: '#0ea5e9',
+              aliveGlow: '#22d3ee',
+            },
+            fontFamily: {
+              inter: ['Inter', 'sans-serif'],
+            },
+            boxShadow: {
+              neon: '0 0 0 1px rgba(56,189,248,.5), 0 0 24px rgba(34,211,238,.35)',
+            },
+            keyframes: {
+              pulseBorder: {
+                '0%, 100%': { boxShadow: '0 0 0 1px rgba(56,189,248,.45), 0 0 0 rgba(34,211,238,0)' },
+                '50%': { boxShadow: '0 0 0 2px rgba(34,211,238,.8), 0 0 22px rgba(34,211,238,.5)' },
+              },
+              blinkGoal: {
+                '0%': { transform: 'scale(1)', filter: 'brightness(1)' },
+                '50%': { transform: 'scale(1.08)', filter: 'brightness(1.45)' },
+                '100%': { transform: 'scale(1)', filter: 'brightness(1)' },
+              },
+            },
+            animation: {
+              alive: 'pulseBorder 2.2s ease-in-out infinite',
+              goal: 'blinkGoal 1s ease-out 2',
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+      body {
+        background: radial-gradient(circle at 15% 10%, rgba(56, 189, 248, 0.09), transparent 35%),
+          radial-gradient(circle at 85% 90%, rgba(14, 165, 233, 0.12), transparent 35%), #0f172a;
+      }
+      .glass {
+        background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.68));
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        backdrop-filter: blur(10px);
+      }
+      .eliminated {
+        opacity: 0.3;
+        filter: grayscale(1);
+      }
+      .tap-btn {
+        min-height: 44px;
+      }
+      .mobile-modal {
+        max-height: calc(100vh - 1rem);
+        overflow-y: auto;
+      }
+      .team-name {
+        word-break: break-word;
+        line-height: 1.2;
+      }
+    </style>
+  </head>
+  <body class="font-inter text-slate-100 min-h-screen">
+    <div id="root" class="max-w-7xl mx-auto px-4 py-6 md:py-10"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      const STORAGE_KEY = 'porra_supervivencia_v1';
+      const ADMIN_KEY = 'porra_admin_visible';
+      const ADMIN_SESSION_KEY = 'porra_admin_session_v1';
+      const SCRAPE_MS = 45000;
+
+      const DEFAULT_MATCHES = [
+        { id: 'm1', order: 1, homeTeam: 'Real Madrid', awayTeam: '', kickoff: '' },
+        { id: 'm2', order: 2, homeTeam: 'FC Barcelona', awayTeam: '', kickoff: '' },
+        { id: 'm3', order: 3, homeTeam: 'SD Ponferradina', awayTeam: '', kickoff: '' },
+      ];
+
+      const KNOWN_TEAM_LOGOS = {
+        'real madrid': 'https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg',
+        'fc barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
+        'barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
+        'sd ponferradina': 'https://upload.wikimedia.org/wikipedia/en/6/6d/SD_Ponferradina_logo.svg',
+        'ponferradina': 'https://upload.wikimedia.org/wikipedia/en/6/6d/SD_Ponferradina_logo.svg',
+      };
+
+      const defaultParticipants = Array.from({ length: 26 }).map((_, i) => ({
+        id: crypto.randomUUID(),
+        name: `Jugador ${String(i + 1).padStart(2, '0')}`,
+        predictions: [
+          { home: null, away: null },
+          { home: null, away: null },
+          { home: null, away: null },
+        ],
+      }));
+
+      const defaultState = {
+        matches: DEFAULT_MATCHES.map((m) => ({
+          id: m.id,
+          order: m.order,
+          homeTeam: m.homeTeam,
+          awayTeam: m.awayTeam,
+          kickoff: m.kickoff,
+          result: { home: null, away: null },
+          source: 'manual',
+          lastUpdated: null,
+        })),
+        participants: defaultParticipants,
+      };
+
+      const toIntOrNull = (v) => {
+        if (v === '' || v === null || v === undefined) return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+
+      const normalizeTeamName = (name) => String(name || '').trim().toLowerCase();
+
+      const isResultSet = (result) => Number.isInteger(result.home) && Number.isInteger(result.away);
+
+      const evaluateParticipant = (participant, matches) => {
+        for (let i = 0; i < matches.length; i++) {
+          const match = matches[i];
+          if (!isResultSet(match.result)) {
+            return { status: 'alive', eliminatedAt: null };
+          }
+          const pred = participant.predictions?.[i];
+          const exact = pred && Number(pred.home) === match.result.home && Number(pred.away) === match.result.away;
+          if (!exact) {
+            return { status: 'eliminated', eliminatedAt: i + 1 };
+          }
+        }
+        return { status: 'alive', eliminatedAt: null };
+      };
+
+      const parseScoreCell = (cell) => {
+        if (cell === null || cell === undefined || cell === '') return { home: null, away: null };
+        if (typeof cell === 'string') {
+          const m = cell.trim().match(/^(\d+)\s*[-:]\s*(\d+)$/);
+          if (m) return { home: Number(m[1]), away: Number(m[2]) };
+        }
+        return { home: null, away: null };
+      };
+
+      const normalizeParticipantRow = (row) => {
+        const keys = Object.keys(row).reduce((acc, k) => {
+          acc[k.toLowerCase().trim()] = row[k];
+          return acc;
+        }, {});
+        const name = keys.nombre || keys.name || keys.usuario || keys.player || keys.participante;
+        if (!name) return null;
+        return {
+          id: crypto.randomUUID(),
+          name: String(name).trim(),
+          predictions: [
+            { home: toIntOrNull(keys.p1_local ?? keys.m1_local ?? keys.rm_goles), away: toIntOrNull(keys.p1_visitante ?? keys.m1_visitante ?? keys.rival1_goles) },
+            { home: toIntOrNull(keys.p2_local ?? keys.m2_local ?? keys.barca_goles), away: toIntOrNull(keys.p2_visitante ?? keys.m2_visitante ?? keys.rival2_goles) },
+            { home: toIntOrNull(keys.p3_local ?? keys.m3_local ?? keys.ponfe_goles), away: toIntOrNull(keys.p3_visitante ?? keys.m3_visitante ?? keys.rival3_goles) },
+          ],
+        };
+      };
+
+      const normalizeParticipantRowFromMatchColumns = (row, matchHeaders) => {
+        const cols = Object.keys(row);
+        if (!cols.length) return null;
+        const nameKey = cols[0];
+        const name = row[nameKey];
+        if (!name || typeof name !== 'string') return null;
+
+        const preds = matchHeaders.slice(0, 3).map((h) => parseScoreCell(row[h]));
+        return {
+          id: crypto.randomUUID(),
+          name: String(name).trim(),
+          predictions: [
+            preds[0] || { home: null, away: null },
+            preds[1] || { home: null, away: null },
+            preds[2] || { home: null, away: null },
+          ],
+        };
+      };
+
+      function App() {
+        const [state, setState] = useState(() => {
+          try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            return raw ? JSON.parse(raw) : defaultState;
+          } catch {
+            return defaultState;
+          }
+        });
+        const [adminOpen, setAdminOpen] = useState(() => localStorage.getItem(ADMIN_KEY) === '1');
+        const [adminLogged, setAdminLogged] = useState(() => localStorage.getItem(ADMIN_SESSION_KEY) === '1');
+        const [adminLoginOpen, setAdminLoginOpen] = useState(false);
+        const [adminUser, setAdminUser] = useState('');
+        const [adminPass, setAdminPass] = useState('');
+        const [adminLoginMsg, setAdminLoginMsg] = useState('');
+        const [logs, setLogs] = useState([]);
+        const [logoCache, setLogoCache] = useState({});
+        const [flashMap, setFlashMap] = useState({});
+        const [scrapingEnabled, setScrapingEnabled] = useState(false);
+        const [scrapeStatus, setScrapeStatus] = useState({
+          level: 'off',
+          text: 'Actualización inactiva',
+        });
+        const [entryOpen, setEntryOpen] = useState(false);
+        const [entryParticipantId, setEntryParticipantId] = useState('');
+        const [entryName, setEntryName] = useState('');
+        const [entryPreds, setEntryPreds] = useState([
+          { home: '', away: '' },
+          { home: '', away: '' },
+          { home: '', away: '' },
+        ]);
+        const [submitMsg, setSubmitMsg] = useState('');
+        const previousScores = useRef({});
+
+        useEffect(() => {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        }, [state]);
+
+        useEffect(() => {
+          localStorage.setItem(ADMIN_KEY, adminOpen ? '1' : '0');
+        }, [adminOpen]);
+
+        useEffect(() => {
+          localStorage.setItem(ADMIN_SESSION_KEY, adminLogged ? '1' : '0');
+        }, [adminLogged]);
+
+        const requestAdminAccess = () => {
+          if (adminLogged) {
+            setAdminOpen((v) => !v);
+            return;
+          }
+          setAdminUser('');
+          setAdminPass('');
+          setAdminLoginMsg('');
+          setAdminLoginOpen(true);
+        };
+
+        const doAdminLogin = () => {
+          if (adminUser === 'ADMIN' && adminPass === '1234') {
+            setAdminLogged(true);
+            setAdminOpen(true);
+            setAdminLoginOpen(false);
+            setAdminLoginMsg('');
+            return;
+          }
+          setAdminLoginMsg('Credenciales incorrectas');
+        };
+
+        const doAdminLogout = () => {
+          setAdminOpen(false);
+          setAdminLogged(false);
+          setAdminLoginOpen(false);
+          setAdminUser('');
+          setAdminPass('');
+          setAdminLoginMsg('');
+        };
+
+        useEffect(() => {
+          const onKey = (e) => {
+            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+              requestAdminAccess();
+            }
+          };
+          window.addEventListener('keydown', onKey);
+          return () => window.removeEventListener('keydown', onKey);
+        }, [adminLogged]);
+
+        const evaluatedParticipants = useMemo(() => {
+          return state.participants.map((p) => ({ ...p, ...evaluateParticipant(p, state.matches) }));
+        }, [state.participants, state.matches]);
+
+        const aliveCount = evaluatedParticipants.filter((p) => p.status === 'alive').length;
+
+        const setMatchField = (index, field, value) => {
+          setState((prev) => {
+            const matches = [...prev.matches];
+            matches[index] = { ...matches[index], [field]: value };
+            return { ...prev, matches };
+          });
+        };
+
+        const setResult = (index, side, value, source = 'manual') => {
+          setState((prev) => {
+            const matches = [...prev.matches];
+            const match = { ...matches[index] };
+            match.result = { ...match.result, [side]: toIntOrNull(value) };
+            match.source = source;
+            match.lastUpdated = new Date().toISOString();
+            matches[index] = match;
+            return { ...prev, matches };
+          });
+        };
+
+        const swapHomeAway = (index) => {
+          setState((prev) => {
+            const matches = [...prev.matches];
+            const m = { ...matches[index] };
+            matches[index] = { ...m, homeTeam: m.awayTeam, awayTeam: m.homeTeam };
+            return { ...prev, matches };
+          });
+        };
+
+        const openEntryModal = () => {
+          setEntryOpen(true);
+          setEntryParticipantId('');
+          setEntryName('');
+          setEntryPreds([
+            { home: '', away: '' },
+            { home: '', away: '' },
+            { home: '', away: '' },
+          ]);
+          setSubmitMsg('');
+        };
+
+        const openEntryModalForParticipant = (participant) => {
+          setEntryOpen(true);
+          setEntryParticipantId(participant.id);
+          setEntryName(participant.name);
+          setEntryPreds(participant.predictions.map((pr) => ({ home: pr.home ?? '', away: pr.away ?? '' })));
+          setSubmitMsg('');
+        };
+
+        const updateEntryPred = (i, side, v) => {
+          setEntryPreds((prev) => {
+            const next = [...prev];
+            next[i] = { ...next[i], [side]: v };
+            return next;
+          });
+        };
+
+        const saveParticipantPrediction = () => {
+          const cleanName = entryName.trim();
+          if (!cleanName) {
+            setSubmitMsg('Escribe tu nombre.');
+            return;
+          }
+          const parsed = entryPreds.map((pr) => ({ home: toIntOrNull(pr.home), away: toIntOrNull(pr.away) }));
+          let outcome = '';
+          setState((prev) => {
+            const locks = prev.matches.map((m) => isMatchLocked(m));
+            if (entryParticipantId) {
+              const idxById = prev.participants.findIndex((p) => p.id === entryParticipantId);
+              if (idxById >= 0) {
+                const participants = [...prev.participants];
+                const existing = participants[idxById].predictions || [
+                  { home: null, away: null },
+                  { home: null, away: null },
+                  { home: null, away: null },
+                ];
+                const nextPreds = parsed.map((pr, i) => (locks[i] ? existing[i] || { home: null, away: null } : pr));
+                const unlockedValid = nextPreds.every((pr, i) => locks[i] || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
+                if (!unlockedValid) {
+                  outcome = 'Completa con números válidos los partidos aún abiertos.';
+                  return prev;
+                }
+                participants[idxById] = { ...participants[idxById], predictions: nextPreds };
+                outcome = `Pronóstico actualizado para ${participants[idxById].name}.`;
+                return { ...prev, participants };
+              }
+            }
+            const idx = prev.participants.findIndex((p) => p.name.trim().toLowerCase() === cleanName.toLowerCase());
+            if (idx >= 0) {
+              const participants = [...prev.participants];
+              const existing = participants[idx].predictions || [
+                { home: null, away: null },
+                { home: null, away: null },
+                { home: null, away: null },
+              ];
+              const nextPreds = parsed.map((pr, i) => (locks[i] ? existing[i] || { home: null, away: null } : pr));
+              const unlockedValid = nextPreds.every((pr, i) => locks[i] || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
+              if (!unlockedValid) {
+                outcome = 'Completa con números válidos los partidos aún abiertos.';
+                return prev;
+              }
+              participants[idx] = { ...participants[idx], predictions: nextPreds };
+              outcome = `Pronóstico actualizado para ${participants[idx].name}.`;
+              return { ...prev, participants };
+            }
+            if (locks.some(Boolean)) {
+              outcome = 'No se pueden crear nuevos participantes después del inicio de partidos.';
+              return prev;
+            }
+            const newValid = parsed.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+            if (!newValid) {
+              outcome = 'Completa los 3 marcadores con números válidos.';
+              return prev;
+            }
+            if (prev.participants.length >= 26) {
+              outcome = 'No hay plazas libres. Usa exactamente un nombre ya registrado.';
+              return prev;
+            }
+            outcome = `Pronóstico guardado para ${cleanName}.`;
+            return {
+              ...prev,
+              participants: [...prev.participants, { id: crypto.randomUUID(), name: cleanName, predictions: parsed }],
+            };
+          });
+          setSubmitMsg(outcome);
+          if (!outcome.startsWith('No hay plazas')) {
+            setEntryOpen(false);
+          }
+        };
+
+        const pushLog = (text) => {
+          setLogs((prev) => [`${new Date().toLocaleTimeString('es-ES')} - ${text}`, ...prev].slice(0, 8));
+        };
+
+        const flashGoal = (matchId, side) => {
+          const key = `${matchId}-${side}`;
+          setFlashMap((prev) => ({ ...prev, [key]: true }));
+          setTimeout(() => {
+            setFlashMap((prev) => ({ ...prev, [key]: false }));
+          }, 1400);
+        };
+
+        const isLiveWindow = (kickoff) => {
+          if (!kickoff) return false;
+          const now = new Date();
+          const ko = new Date(kickoff);
+          const start = new Date(ko.getTime() - 15 * 60 * 1000);
+          const end = new Date(ko.getTime() + 3 * 60 * 60 * 1000);
+          return now >= start && now <= end;
+        };
+
+        const isMatchLocked = (match) => {
+          if (!match.kickoff) return false;
+          return new Date() >= new Date(match.kickoff);
+        };
+
+        const getMatchPhase = (match) => {
+          if (!match.kickoff) return { level: 'waiting', text: 'Esperando (sin hora)' };
+          const now = new Date();
+          const ko = new Date(match.kickoff);
+          const start = new Date(ko.getTime() - 15 * 60 * 1000);
+          const end = new Date(ko.getTime() + 3 * 60 * 60 * 1000);
+          if (now < start) return { level: 'waiting', text: 'Esperando partido' };
+          if (now >= start && now <= end) return { level: 'active', text: 'Partido activo' };
+          return { level: 'ended', text: 'Partido terminado' };
+        };
+
+        const getTeamLogo = (teamName) => {
+          const known = KNOWN_TEAM_LOGOS[normalizeTeamName(teamName)];
+          return known || logoCache[teamName] || null;
+        };
+
+        const fetchTeamLogo = async (teamName) => {
+          if (!teamName || getTeamLogo(teamName)) return;
+          try {
+            const res = await fetch(`https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=${encodeURIComponent(teamName)}`);
+            const data = await res.json();
+            const logo = data?.teams?.[0]?.strBadge;
+            if (logo) setLogoCache((prev) => ({ ...prev, [teamName]: logo }));
+          } catch {
+            // silent fallback
+          }
+        };
+
+        useEffect(() => {
+          state.matches.forEach((m) => {
+            if (m.homeTeam) fetchTeamLogo(m.homeTeam);
+            if (m.awayTeam) fetchTeamLogo(m.awayTeam);
+          });
+        }, [state.matches]);
+
+        const scrapeMatch = async (match, idx) => {
+          if (!match.homeTeam || !match.awayTeam) return;
+          const options = [`${match.homeTeam} vs ${match.awayTeam}`, `${match.awayTeam} vs ${match.homeTeam}`];
+          let hadNetworkError = false;
+          for (const query of options) {
+            try {
+              const res = await fetch(`https://www.thesportsdb.com/api/v1/json/3/searchevents.php?e=${encodeURIComponent(query)}`);
+              const data = await res.json();
+              const event = data?.event?.find((ev) => {
+                const home = (ev.strHomeTeam || '').toLowerCase();
+                const away = (ev.strAwayTeam || '').toLowerCase();
+                return home.includes(match.homeTeam.toLowerCase().split(' ')[0]) && away.includes(match.awayTeam.toLowerCase().split(' ')[0]);
+              }) || data?.event?.[0];
+
+              if (event && event.intHomeScore !== null && event.intAwayScore !== null) {
+                const home = Number(event.intHomeScore);
+                const away = Number(event.intAwayScore);
+                const prevKey = `${match.id}`;
+                const prev = previousScores.current[prevKey];
+
+                if (!prev || prev.home !== home) flashGoal(match.id, 'home');
+                if (!prev || prev.away !== away) flashGoal(match.id, 'away');
+                previousScores.current[prevKey] = { home, away };
+
+                setState((prevState) => {
+                  const matches = [...prevState.matches];
+                  matches[idx] = {
+                    ...matches[idx],
+                    result: { home, away },
+                    source: 'scraping',
+                    lastUpdated: new Date().toISOString(),
+                  };
+                  return { ...prevState, matches };
+                });
+                pushLog(`Actualización correcta: ${match.homeTeam} ${home}-${away} ${match.awayTeam}`);
+                return { ok: true };
+              }
+            } catch {
+              hadNetworkError = true;
+            }
+          }
+          pushLog(`Partido ${idx + 1}: sin datos, usa manual.`);
+          return { ok: false, reason: hadNetworkError ? 'network' : 'nodata' };
+        };
+
+        const runScrape = async (respectWindow = true) => {
+          let attempts = 0;
+          let ok = 0;
+          let fail = 0;
+          for (let i = 0; i < state.matches.length; i++) {
+            const match = state.matches[i];
+            if (!respectWindow || isLiveWindow(match.kickoff)) {
+              if (!match.homeTeam || !match.awayTeam) continue;
+              attempts += 1;
+              const result = await scrapeMatch(match, i);
+              if (result?.ok) ok += 1;
+              else fail += 1;
+            }
+          }
+          if (!scrapingEnabled) {
+            setScrapeStatus({ level: 'off', text: 'Actualización inactiva' });
+            return;
+          }
+          if (attempts === 0) {
+            setScrapeStatus({ level: 'waiting', text: 'En espera: aún no hay partidos en ventana' });
+            return;
+          }
+          if (fail > 0) {
+            setScrapeStatus({ level: 'error', text: `Error actualización (${ok} OK / ${fail} fallo)` });
+            return;
+          }
+          setScrapeStatus({ level: 'active', text: `Actualización activa (${ok} partidos actualizados)` });
+        };
+
+        useEffect(() => {
+          if (!scrapingEnabled) {
+            setScrapeStatus({ level: 'off', text: 'Actualización inactiva' });
+            return;
+          }
+          setScrapeStatus({ level: 'waiting', text: 'En espera: activado, pendiente de ventana de partido' });
+          const id = setInterval(() => {
+            runScrape(true);
+          }, SCRAPE_MS);
+          return () => clearInterval(id);
+        }, [scrapingEnabled, state.matches.map((m) => `${m.homeTeam}|${m.awayTeam}|${m.kickoff}`).join('||')]);
+
+        const importParticipants = async (file) => {
+          if (!file) return;
+          const ext = file.name.split('.').pop().toLowerCase();
+
+          try {
+            if (ext === 'json') {
+              const text = await file.text();
+              const arr = JSON.parse(text);
+              const parsed = arr.map(normalizeParticipantRow).filter(Boolean);
+              if (parsed.length) {
+                setState((prev) => ({ ...prev, participants: parsed }));
+                pushLog(`Importados ${parsed.length} usuarios desde JSON`);
+              }
+              return;
+            }
+
+            if ((ext === 'xlsx' || ext === 'xls') && window.XLSX) {
+              const buffer = await file.arrayBuffer();
+              const wb = XLSX.read(buffer, { type: 'array' });
+              const ws = wb.Sheets[wb.SheetNames[0]];
+              const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+              let parsed = rows.map(normalizeParticipantRow).filter(Boolean);
+
+              if (!parsed.length && rows.length) {
+                const headers = Object.keys(rows[0]);
+                const matchHeaders = headers.slice(1, 4);
+                parsed = rows.map((r) => normalizeParticipantRowFromMatchColumns(r, matchHeaders)).filter(Boolean);
+              }
+
+              if (parsed.length) {
+                setState((prev) => ({ ...prev, participants: parsed }));
+                pushLog(`Importados ${parsed.length} usuarios desde Excel`);
+              } else {
+                pushLog('No se pudieron interpretar columnas del Excel');
+              }
+              return;
+            }
+
+            pushLog('Formato no soportado. Usa .json, .xlsx o .xls');
+          } catch {
+            pushLog('Error al importar archivo');
+          }
+        };
+
+        const resetRound = () => {
+          if (!confirm('Se borrarán resultados y se reiniciará la jornada. ¿Continuar?')) return;
+          setState((prev) => ({
+            ...prev,
+            matches: prev.matches.map((m) => ({ ...m, result: { home: null, away: null }, source: 'manual', lastUpdated: null })),
+          }));
+          previousScores.current = {};
+          pushLog('Jornada reseteada');
+        };
+
+        const resetParticipantPredictions = (participantId) => {
+          const participant = state.participants.find((p) => p.id === participantId);
+          if (!participant) return;
+          if (!confirm(`Se borrarán los 3 pronósticos de ${participant.name}. ¿Continuar?`)) return;
+          setState((prev) => ({
+            ...prev,
+            participants: prev.participants.map((p) =>
+              p.id === participantId
+                ? {
+                    ...p,
+                    predictions: [
+                      { home: null, away: null },
+                      { home: null, away: null },
+                      { home: null, away: null },
+                    ],
+                  }
+                : p
+            ),
+          }));
+          pushLog(`Reseteado participante: ${participant.name}`);
+        };
+
+        return (
+          <div className="space-y-5 md:space-y-6 pb-20 md:pb-6">
+            <header className="glass rounded-2xl p-5 md:p-7 shadow-neon">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-cyan-300">La Porra de Supervivencia</h1>
+                  <p className="text-slate-300 text-sm md:text-base">Muerte súbita por orden cronológico en 3 partidos configurables por el administrador.</p>
+                </div>
+                <div className="text-left md:text-right">
+                  <p className="text-xs uppercase tracking-widest text-slate-400">Supervivientes</p>
+                  <p className="text-3xl font-bold text-cyan-200">{aliveCount} / {state.participants.length}</p>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button onClick={requestAdminAccess} className="tap-btn bg-slate-800 hover:bg-slate-700 rounded px-4 py-2 text-sm">
+                  {adminOpen && adminLogged ? 'Ocultar admin' : 'Acceso admin'}
+                </button>
+                <p className="text-xs text-slate-500">Atajo: <span className="text-slate-300">Ctrl + Shift + A</span></p>
+                <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 px-3 py-2 text-xs bg-slate-900/60">
+                  <span
+                    className={`inline-block w-3 h-3 rounded-full ${
+                      scrapeStatus.level === 'active'
+                        ? 'bg-lime-400 shadow-[0_0_10px_rgba(74,222,128,0.95)]'
+                        : scrapeStatus.level === 'waiting'
+                          ? 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.95)]'
+                          : scrapeStatus.level === 'error'
+                            ? 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.95)]'
+                            : 'bg-slate-500'
+                    }`}
+                  />
+                  <span className="text-slate-200">{scrapeStatus.text}</span>
+                </div>
+              </div>
+            </header>
+
+            <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {state.matches.map((match, idx) => {
+                const homeLogo = getTeamLogo(match.homeTeam);
+                const awayLogo = getTeamLogo(match.awayTeam);
+                const homeFlash = flashMap[`${match.id}-home`];
+                const awayFlash = flashMap[`${match.id}-away`];
+                const phase = getMatchPhase(match);
+                const phaseDot =
+                  phase.level === 'active'
+                    ? 'bg-lime-400 shadow-[0_0_10px_rgba(74,222,128,0.95)]'
+                    : phase.level === 'waiting'
+                      ? 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.95)]'
+                      : 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.95)]';
+
+                return (
+                  <article key={match.id} className="glass rounded-2xl p-4 md:p-5">
+                    <p className="text-xs text-slate-400 mb-3">Partido {idx + 1}</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {homeLogo ? <img src={homeLogo} alt={match.homeTeam} className="w-10 h-10 object-contain" /> : <div className="w-10 h-10 rounded-full bg-slate-800 grid place-items-center text-xs">?</div>}
+                        <span className="font-semibold text-sm md:text-base team-name">{match.homeTeam || 'Local por definir'}</span>
+                      </div>
+                      <div className={`min-w-10 text-center px-3 py-1.5 rounded-md bg-slate-900/60 border border-slate-700 text-base ${homeFlash ? 'animate-goal text-lime-300' : ''}`}>
+                        {match.result.home ?? '-'}
+                      </div>
+                    </div>
+                    <div className="my-2 text-center text-slate-500 text-xs">VS</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {awayLogo ? <img src={awayLogo} alt={match.awayTeam} className="w-10 h-10 object-contain" /> : <div className="w-10 h-10 rounded-full bg-slate-800 grid place-items-center text-xs">?</div>}
+                        <span className="font-semibold text-sm md:text-base team-name">{match.awayTeam || 'Rival por definir'}</span>
+                      </div>
+                      <div className={`min-w-10 text-center px-3 py-1.5 rounded-md bg-slate-900/60 border border-slate-700 text-base ${awayFlash ? 'animate-goal text-rose-300' : ''}`}>
+                        {match.result.away ?? '-'}
+                      </div>
+                    </div>
+                    <div className="mt-4 text-xs text-slate-400 space-y-1">
+                      <div>Fecha/Hora: <span className="text-slate-200">{match.kickoff ? new Date(match.kickoff).toLocaleString('es-ES') : 'Sin programar'}</span></div>
+                      <div>Fuente: <span className="text-slate-200 uppercase">{match.source}</span></div>
+                      <div className="inline-flex items-center gap-2">
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${phaseDot}`} />
+                        <span className="text-slate-200">{phase.text}</span>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
+
+            <section className="glass rounded-2xl p-4 md:p-6">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-cyan-300">Pronósticos participantes</h2>
+                  <p className="text-sm text-slate-300">Cada participante carga su apuesta desde su propia tarjeta con el botón `Poner resultado`.</p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 mt-3">{submitMsg || ' '}</p>
+            </section>
+
+            {entryOpen && (
+              <section className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm p-2 md:p-4 grid place-items-center">
+                <div className="mobile-modal w-full max-w-2xl glass rounded-2xl p-4 md:p-6 space-y-4 border border-cyan-500/30">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-bold text-cyan-300">Incluir resultados</h2>
+                    <button onClick={() => setEntryOpen(false)} className="text-slate-300 hover:text-white text-sm">Cerrar</button>
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Nombre del participante</label>
+                    <input
+                      value={entryName}
+                      onChange={(e) => setEntryName(e.target.value)}
+                      placeholder="Ej: DIAMANTE 1"
+                      readOnly={Boolean(entryParticipantId)}
+                      className="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {state.matches.map((m, i) => (
+                      <div key={m.id} className="rounded-xl bg-slate-950/35 p-3 border border-slate-700 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm text-slate-200 font-semibold">P{i + 1}: {m.homeTeam} vs {m.awayTeam || 'Rival'}</p>
+                          {isMatchLocked(m) && <span className="text-[10px] uppercase bg-rose-800/70 text-rose-100 px-2 py-1 rounded">Cerrado</span>}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            value={entryPreds[i]?.home ?? ''}
+                            onChange={(e) => updateEntryPred(i, 'home', e.target.value)}
+                            placeholder="Local"
+                            disabled={isMatchLocked(m)}
+                            className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            value={entryPreds[i]?.away ?? ''}
+                            onChange={(e) => updateEntryPred(i, 'away', e.target.value)}
+                            placeholder="Visitante"
+                            disabled={isMatchLocked(m)}
+                            className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={() => setEntryOpen(false)} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-4 py-2 text-sm">Cancelar</button>
+                    <button onClick={saveParticipantPrediction} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-4 py-2 text-sm font-semibold">Guardar</button>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {adminOpen && adminLogged && (
+              <section className="glass rounded-2xl p-4 md:p-6 space-y-5 border-cyan-500/30">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="font-bold text-cyan-300">Panel de Control (Admin)</h2>
+                  <button onClick={doAdminLogout} className="tap-btn bg-rose-700 hover:bg-rose-600 rounded px-3 py-2 text-sm">
+                    Salir admin
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-3 items-center">
+                  <button
+                    onClick={() => setScrapingEnabled((v) => !v)}
+                    className={`tap-btn rounded px-3 py-2 text-sm ${scrapingEnabled ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-slate-700 hover:bg-slate-600'}`}
+                  >
+                    Actualización automática: {scrapingEnabled ? 'ACTIVA' : 'INACTIVA'}
+                  </button>
+                  <button onClick={() => runScrape(false)} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-2 text-sm">
+                    Actualizar ahora (manual)
+                  </button>
+                  <p className="text-xs text-slate-400">Si dudas de la actualización automática, déjala inactiva y mete goles manualmente.</p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {state.matches.map((m, idx) => (
+                    <div key={m.id} className="rounded-xl bg-slate-950/35 p-3 border border-slate-700 space-y-2">
+                      <p className="text-sm font-semibold text-slate-200">Partido {idx + 1}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          value={m.homeTeam}
+                          onChange={(e) => setMatchField(idx, 'homeTeam', e.target.value)}
+                          placeholder="Equipo local"
+                          className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                        />
+                        <input
+                          value={m.awayTeam}
+                          onChange={(e) => setMatchField(idx, 'awayTeam', e.target.value)}
+                          placeholder="Equipo visitante"
+                          className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                        />
+                      </div>
+                      <button onClick={() => swapHomeAway(idx)} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-3 py-2 text-sm">
+                        Intercambiar local/visitante
+                      </button>
+                      <input
+                        type="datetime-local"
+                        value={m.kickoff}
+                        onChange={(e) => setMatchField(idx, 'kickoff', e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          value={m.result.home ?? ''}
+                          onChange={(e) => setResult(idx, 'home', e.target.value, 'manual')}
+                          placeholder="Local"
+                          className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={m.result.away ?? ''}
+                          onChange={(e) => setResult(idx, 'away', e.target.value, 'manual')}
+                          placeholder="Visitante"
+                          className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap gap-3 items-center">
+                  <label className="cursor-pointer tap-btn inline-flex items-center gap-2 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm">
+                    <span>Importar usuarios (.json/.xlsx)</span>
+                    <input
+                      type="file"
+                      accept=".json,.xlsx,.xls"
+                      className="hidden"
+                      onChange={(e) => importParticipants(e.target.files?.[0])}
+                    />
+                  </label>
+                  <button onClick={resetRound} className="tap-btn bg-rose-700/70 hover:bg-rose-700 rounded px-3 py-2 text-sm">Resetear jornada</button>
+                </div>
+
+                <div className="rounded-lg bg-slate-950/40 border border-slate-800 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-400 mb-2">Log de partidos</p>
+                  <div className="space-y-1 text-xs text-slate-300 max-h-32 overflow-auto">
+                    {logs.length ? logs.map((l, i) => <div key={i}>{l}</div>) : <div className="text-slate-500">Sin eventos todavía</div>}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {adminLoginOpen && (
+              <section className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm p-2 md:p-4 grid place-items-center">
+                <div className="mobile-modal w-full max-w-md glass rounded-2xl p-4 md:p-6 space-y-4 border border-cyan-500/30">
+                  <h2 className="text-lg font-bold text-cyan-300">Acceso administrador</h2>
+                  <div>
+                    <label className="text-xs text-slate-400">Usuario</label>
+                    <input
+                      value={adminUser}
+                      onChange={(e) => setAdminUser(e.target.value)}
+                      placeholder="ADMIN"
+                      className="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Contraseña</label>
+                    <input
+                      type="password"
+                      value={adminPass}
+                      onChange={(e) => setAdminPass(e.target.value)}
+                      placeholder="1234"
+                      className="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                    />
+                  </div>
+                  <p className="text-xs text-rose-300">{adminLoginMsg || ' '}</p>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setAdminLoginOpen(false)}
+                      className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-4 py-2 text-sm"
+                    >
+                      Cancelar
+                    </button>
+                    <button onClick={doAdminLogin} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-4 py-2 text-sm font-semibold">
+                      Entrar
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            <section>
+              <h2 className="mb-3 text-lg font-bold text-slate-200">Participantes</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                {evaluatedParticipants.map((p) => (
+                  (() => {
+                    const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+                    const lightClass = p.status === 'eliminated'
+                      ? 'bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.95)]'
+                      : hasFullPrediction
+                        ? 'bg-lime-400 shadow-[0_0_12px_rgba(74,222,128,0.95)] animate-pulse'
+                        : 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.95)] animate-pulse';
+                    const lightTitle = p.status === 'eliminated' ? 'Eliminado' : hasFullPrediction ? 'Pronóstico completo' : 'Pronóstico incompleto';
+                    const cardClass = p.status === 'eliminated'
+                      ? 'border-slate-700 eliminated'
+                      : hasFullPrediction
+                        ? 'border-cyan-500 animate-alive'
+                        : 'border-amber-500/70';
+                    return (
+                  <article
+                    key={p.id}
+                    className={`rounded-xl border p-3 relative bg-slate-900/45 ${cardClass}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <h3 className="font-semibold">{p.name}</h3>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block w-3 h-3 rounded-full ${lightClass}`}
+                          title={lightTitle}
+                        />
+                        {p.status === 'eliminated' && <span className="text-rose-500 font-extrabold">X</span>}
+                      </div>
+                    </div>
+                    <p className="text-xs mt-2 text-slate-400">
+                      {p.status === 'alive' ? 'Sigue con vida' : `ELIMINADO en Partido ${p.eliminatedAt}`}
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
+                      {p.predictions.map((pr, i) => (
+                        <div key={i} className="bg-slate-950/65 rounded px-2 py-1 text-center border border-slate-800">
+                          P{i + 1}: {pr.home ?? '-'}-{pr.away ?? '-'}
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => openEntryModalForParticipant(p)}
+                      disabled={state.matches.every((m) => isMatchLocked(m))}
+                      className="tap-btn mt-3 w-full bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-2 text-sm font-semibold"
+                    >
+                      {state.matches.every((m) => isMatchLocked(m)) ? 'Edición cerrada' : 'Poner resultado'}
+                    </button>
+                    {adminOpen && adminLogged && (
+                      <button
+                        onClick={() => resetParticipantPredictions(p.id)}
+                        className="tap-btn mt-2 w-full bg-rose-800 hover:bg-rose-700 rounded px-3 py-2 text-sm font-semibold"
+                      >
+                        Reset participante
+                      </button>
+                    )}
+                  </article>
+                    );
+                  })()
+                ))}
+              </div>
+            </section>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+  </body>
+</html>
