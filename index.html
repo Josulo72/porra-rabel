@@ -292,10 +292,13 @@
         const saveSharedState = async (nextState) => {
           if (!sharedApiConfigured() || storageMode !== 'shared') return;
           try {
+            const body = JSON.stringify({
+              action: 'setState',
+              state: nextState,
+            });
             await fetch(API_BASE, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'setState', state: nextState }),
+              body,
             });
           } catch {
             pushLog('Error guardando en backend compartido');
