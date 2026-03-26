@@ -105,8 +105,8 @@
       'real madrid': 'https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg',
       'fc barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
       'barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
-      'sd ponferradina': 'https://upload.wikimedia.org/wikipedia/en/6/6d/SD_Ponferradina_logo.svg',
-      'ponferradina': 'https://upload.wikimedia.org/wikipedia/en/6/6d/SD_Ponferradina_logo.svg',
+      'sd ponferradina': 'https://upload.wikimedia.org/wikipedia/en/0/01/SD_Ponferradina_logo.png',
+      'ponferradina': 'https://upload.wikimedia.org/wikipedia/en/0/01/SD_Ponferradina_logo.png',
     };
 
     const defaultParticipants = Array.from({ length: 26 }).map((_, i) => ({
@@ -117,6 +117,7 @@
         { home: null, away: null },
         { home: null, away: null },
       ],
+      locked: [false, false, false],
     }));
 
     const defaultState = {
@@ -147,10 +148,15 @@
       for (let i = 0; i < matches.length; i++) {
         const match = matches[i];
         if (!isResultSet(match.result)) {
+          // Partido sin resultado aún — seguimos evaluando en orden
           return { status: 'alive', eliminatedAt: null };
         }
         const pred = participant.predictions?.[i];
-        const exact = pred && Number(pred.home) === match.result.home && Number(pred.away) === match.result.away;
+        // Si no tiene predicción (null) para un partido con resultado → eliminado
+        if (!pred || pred.home === null || pred.home === undefined || pred.away === null || pred.away === undefined) {
+          return { status: 'eliminated', eliminatedAt: i + 1 };
+        }
+        const exact = Number(pred.home) === match.result.home && Number(pred.away) === match.result.away;
         if (!exact) {
           return { status: 'eliminated', eliminatedAt: i + 1 };
         }
@@ -234,6 +240,7 @@
           home: toIntOrNull(p.predictions?.[idx]?.home),
           away: toIntOrNull(p.predictions?.[idx]?.away),
         })),
+        locked: [0, 1, 2].map((idx) => Boolean(p.locked?.[idx])),
       })).filter((p) => p.name);
 
       return {
@@ -273,6 +280,7 @@
         { home: '', away: '' },
         { home: '', away: '' },
       ]);
+      const [entryLocks, setEntryLocks] = useState([false, false, false]);
       const [submitMsg, setSubmitMsg] = useState('');
       const [storageMode, setStorageMode] = useState('init');
       const previousScores = useRef({});
@@ -310,6 +318,23 @@
           });
         } catch {
           pushLog('Error guardando en backend compartido');
+        }
+      };
+
+      // Actualización atómica de un solo participante (evita race conditions)
+      const saveParticipantRemote = async (participant) => {
+        if (!sharedApiConfigured() || storageMode !== 'shared') return;
+        try {
+          const body = JSON.stringify({
+            action: 'updateParticipant',
+            participant,
+          });
+          await fetch(API_BASE, {
+            method: 'POST',
+            body,
+          });
+        } catch {
+          pushLog('Error guardando participante en backend');
         }
       };
 
@@ -434,6 +459,7 @@
           { home: '', away: '' },
           { home: '', away: '' },
         ]);
+        setEntryLocks([false, false, false]);
         setSubmitMsg('');
       };
 
@@ -442,6 +468,7 @@
         setEntryParticipantId(participant.id);
         setEntryName(participant.name);
         setEntryPreds(participant.predictions.map((pr) => ({ home: pr.home ?? '', away: pr.away ?? '' })));
+        setEntryLocks(participant.locked || [false, false, false]);
         setSubmitMsg('');
       };
 
@@ -461,47 +488,59 @@
         }
         const parsed = entryPreds.map((pr) => ({ home: toIntOrNull(pr.home), away: toIntOrNull(pr.away) }));
         let outcome = '';
+        let savedParticipant = null;
         setState((prev) => {
-          const locks = prev.matches.map((m) => isMatchLocked(m));
+          const matchLocks = prev.matches.map((m) => isMatchLocked(m));
+
+          // Buscar participante existente (por id o por nombre)
+          let idx = -1;
           if (entryParticipantId) {
-            const idxById = prev.participants.findIndex((p) => p.id === entryParticipantId);
-            if (idxById >= 0) {
-              const participants = [...prev.participants];
-              const existing = participants[idxById].predictions || [
-                { home: null, away: null },
-                { home: null, away: null },
-                { home: null, away: null },
-              ];
-              const nextPreds = parsed.map((pr, i) => (locks[i] ? existing[i] || { home: null, away: null } : pr));
-              const unlockedValid = nextPreds.every((pr, i) => locks[i] || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
-              if (!unlockedValid) {
-                outcome = 'Completa con números válidos los partidos aún abiertos.';
-                return prev;
-              }
-              participants[idxById] = { ...participants[idxById], predictions: nextPreds };
-              outcome = `Pronóstico actualizado para ${participants[idxById].name}.`;
-              return { ...prev, participants };
-            }
+            idx = prev.participants.findIndex((p) => p.id === entryParticipantId);
           }
-          const idx = prev.participants.findIndex((p) => p.name.trim().toLowerCase() === cleanName.toLowerCase());
+          if (idx < 0) {
+            idx = prev.participants.findIndex((p) => p.name.trim().toLowerCase() === cleanName.toLowerCase());
+          }
+
           if (idx >= 0) {
+            // Participante existente: respetar locks de partido Y locks de predicción
             const participants = [...prev.participants];
-            const existing = participants[idx].predictions || [
-              { home: null, away: null },
-              { home: null, away: null },
-              { home: null, away: null },
-            ];
-            const nextPreds = parsed.map((pr, i) => (locks[i] ? existing[i] || { home: null, away: null } : pr));
-            const unlockedValid = nextPreds.every((pr, i) => locks[i] || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
+            const existing = participants[idx];
+            const existingPreds = existing.predictions || [{ home: null, away: null }, { home: null, away: null }, { home: null, away: null }];
+            const existingLocks = existing.locked || [false, false, false];
+
+            // Un partido está bloqueado si: el partido ya empezó O el participante ya envió su predicción
+            const isBlocked = (i) => matchLocks[i] || existingLocks[i];
+
+            const nextPreds = parsed.map((pr, i) => isBlocked(i) ? existingPreds[i] || { home: null, away: null } : pr);
+            const nextLocks = existingLocks.map((lk, i) => {
+              if (lk) return true; // ya estaba locked
+              if (matchLocks[i]) return true; // partido empezado
+              // Marcar como locked si envía predicción válida
+              return Number.isInteger(nextPreds[i].home) && Number.isInteger(nextPreds[i].away);
+            });
+
+            // Verificar que los partidos abiertos (no bloqueados) tengan valores válidos
+            const unlockedValid = nextPreds.every((pr, i) => isBlocked(i) || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
             if (!unlockedValid) {
               outcome = 'Completa con números válidos los partidos aún abiertos.';
               return prev;
             }
-            participants[idx] = { ...participants[idx], predictions: nextPreds };
-            outcome = `Pronóstico actualizado para ${participants[idx].name}.`;
+
+            // Verificar si hay algo que cambiar (si todo está bloqueado, no hay nada que hacer)
+            const allBlocked = [0, 1, 2].every((i) => isBlocked(i));
+            if (allBlocked) {
+              outcome = 'Todos tus pronósticos ya están bloqueados. No puedes modificarlos.';
+              return prev;
+            }
+
+            participants[idx] = { ...existing, predictions: nextPreds, locked: nextLocks };
+            savedParticipant = participants[idx];
+            outcome = `Pronóstico guardado para ${existing.name}.`;
             return { ...prev, participants };
           }
-          if (locks.some(Boolean)) {
+
+          // Nuevo participante
+          if (matchLocks.some(Boolean)) {
             outcome = 'No se pueden crear nuevos participantes después del inicio de partidos.';
             return prev;
           }
@@ -514,16 +553,24 @@
             outcome = 'No hay plazas libres. Usa exactamente un nombre ya registrado.';
             return prev;
           }
+          const newParticipant = {
+            id: crypto.randomUUID(),
+            name: cleanName,
+            predictions: parsed,
+            locked: [true, true, true],
+          };
+          savedParticipant = newParticipant;
           outcome = `Pronóstico guardado para ${cleanName}.`;
           return {
             ...prev,
-            participants: [...prev.participants, { id: crypto.randomUUID(), name: cleanName, predictions: parsed }],
+            participants: [...prev.participants, newParticipant],
           };
         });
         setSubmitMsg(outcome);
-        // Solo cerrar el modal si el guardado fue exitoso
-        if (outcome.startsWith('Pronóstico')) {
+        if (outcome.startsWith('Pronóstico guardado')) {
           setEntryOpen(false);
+          // Envío atómico al backend (no espera, no bloquea UI)
+          if (savedParticipant) saveParticipantRemote(savedParticipant);
         }
       };
 
@@ -543,8 +590,8 @@
         if (!kickoff) return false;
         const now = new Date();
         const ko = new Date(kickoff);
-        const start = new Date(ko.getTime() - 15 * 60 * 1000);
-        const end = new Date(ko.getTime() + 3 * 60 * 60 * 1000);
+        const start = new Date(ko.getTime() - 5 * 60 * 1000); // 5 min antes del kickoff
+        const end = new Date(ko.getTime() + 135 * 60 * 1000); // 2h15min después (partido + 15 min extra)
         return now >= start && now <= end;
       };
 
@@ -557,8 +604,8 @@
         if (!match.kickoff) return { level: 'waiting', text: 'Esperando (sin hora)' };
         const now = new Date();
         const ko = new Date(match.kickoff);
-        const start = new Date(ko.getTime() - 15 * 60 * 1000);
-        const end = new Date(ko.getTime() + 3 * 60 * 60 * 1000);
+        const start = new Date(ko.getTime() - 5 * 60 * 1000);
+        const end = new Date(ko.getTime() + 135 * 60 * 1000);
         if (now < start) return { level: 'waiting', text: 'Esperando partido' };
         if (now >= start && now <= end) return { level: 'active', text: 'Partido activo' };
         if (isResultSet(match.result)) return { level: 'ended', text: 'Partido terminado ✓' };
@@ -656,6 +703,19 @@
           setScrapeStatus({ level: 'off', text: 'Actualización inactiva' });
           return;
         }
+
+        // Auto-desactivar si todos los partidos con kickoff ya pasaron su ventana
+        const allMatchesWithKickoff = state.matches.filter((m) => m.kickoff);
+        if (allMatchesWithKickoff.length > 0 && allMatchesWithKickoff.every((m) => !isLiveWindow(m.kickoff))) {
+          const allEnded = allMatchesWithKickoff.every((m) => new Date() > new Date(new Date(m.kickoff).getTime() + 135 * 60 * 1000));
+          if (allEnded) {
+            setScrapingEnabled(false);
+            setScrapeStatus({ level: 'off', text: 'Scraping detenido: todos los partidos han terminado' });
+            pushLog('Scraping auto-desactivado: todos los partidos fuera de ventana');
+            return;
+          }
+        }
+
         if (attempts === 0) {
           setScrapeStatus({ level: 'waiting', text: 'En espera: aún no hay partidos en ventana' });
           return;
@@ -679,6 +739,39 @@
         return () => clearInterval(id);
       }, [scrapingEnabled, state.matches.map((m) => `${m.homeTeam}|${m.awayTeam}|${m.kickoff}`).join('||')]);
 
+      // Merge inteligente: no borra participantes existentes, solo rellena/añade
+      const mergeImportedParticipants = (prev, imported) => {
+        const existing = [...prev.participants];
+        let added = 0;
+        let updated = 0;
+
+        for (const imp of imported) {
+          const idx = existing.findIndex((p) => p.name.trim().toLowerCase() === imp.name.trim().toLowerCase());
+          if (idx >= 0) {
+            // Participante ya existe: solo rellenar predicciones vacías (respetar locked)
+            const ex = existing[idx];
+            const exLocks = ex.locked || [false, false, false];
+            const mergedPreds = [0, 1, 2].map((i) => {
+              // Si ya tiene predicción locked, no sobrescribir
+              if (exLocks[i]) return ex.predictions[i];
+              // Si ya tiene predicción válida en la web, no sobrescribir
+              if (Number.isInteger(ex.predictions[i]?.home) && Number.isInteger(ex.predictions[i]?.away)) return ex.predictions[i];
+              // Si el import trae predicción, usarla
+              if (Number.isInteger(imp.predictions[i]?.home) && Number.isInteger(imp.predictions[i]?.away)) return imp.predictions[i];
+              // Si no, mantener lo que haya
+              return ex.predictions[i];
+            });
+            existing[idx] = { ...ex, predictions: mergedPreds };
+            updated++;
+          } else {
+            // Participante nuevo: añadir
+            existing.push({ ...imp, locked: [false, false, false] });
+            added++;
+          }
+        }
+        return { participants: existing, added, updated };
+      };
+
       const importParticipants = async (file) => {
         if (!file) return;
         const ext = file.name.split('.').pop().toLowerCase();
@@ -689,8 +782,11 @@
             const arr = JSON.parse(text);
             const parsed = arr.map(normalizeParticipantRow).filter(Boolean);
             if (parsed.length) {
-              setState((prev) => ({ ...prev, participants: parsed }));
-              pushLog(`Importados ${parsed.length} usuarios desde JSON`);
+              setState((prev) => {
+                const result = mergeImportedParticipants(prev, parsed);
+                pushLog(`JSON: ${result.added} nuevos, ${result.updated} actualizados (sin borrar existentes)`);
+                return { ...prev, participants: result.participants };
+              });
             }
             return;
           }
@@ -709,8 +805,11 @@
             }
 
             if (parsed.length) {
-              setState((prev) => ({ ...prev, participants: parsed }));
-              pushLog(`Importados ${parsed.length} usuarios desde Excel`);
+              setState((prev) => {
+                const result = mergeImportedParticipants(prev, parsed);
+                pushLog(`Excel: ${result.added} nuevos, ${result.updated} actualizados (sin borrar existentes)`);
+                return { ...prev, participants: result.participants };
+              });
             } else {
               pushLog('No se pudieron interpretar columnas del Excel');
             }
@@ -724,13 +823,22 @@
       };
 
       const resetRound = () => {
-        if (!confirm('Se borrarán resultados y se reiniciará la jornada. ¿Continuar?')) return;
+        if (!confirm('Se borrarán resultados de partidos Y pronósticos de todos los participantes. ¿Continuar?')) return;
         setState((prev) => ({
           ...prev,
           matches: prev.matches.map((m) => ({ ...m, result: { home: null, away: null }, source: 'manual', lastUpdated: null })),
+          participants: prev.participants.map((p) => ({
+            ...p,
+            predictions: [
+              { home: null, away: null },
+              { home: null, away: null },
+              { home: null, away: null },
+            ],
+            locked: [false, false, false],
+          })),
         }));
         previousScores.current = {};
-        pushLog('Jornada reseteada');
+        pushLog('Jornada reseteada (resultados y pronósticos)');
       };
 
       const resetParticipantPredictions = (participantId) => {
@@ -748,6 +856,7 @@
                   { home: null, away: null },
                   { home: null, away: null },
                 ],
+                locked: [false, false, false],
               }
               : p
           ),
@@ -883,34 +992,38 @@
                   />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {state.matches.map((m, i) => (
-                    <div key={m.id} className="rounded-xl bg-slate-950/35 p-3 border border-slate-700 space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm text-slate-200 font-semibold">P{i + 1}: {m.homeTeam} vs {m.awayTeam || 'Rival'}</p>
-                        {isMatchLocked(m) && <span className="text-[10px] uppercase bg-rose-800/70 text-rose-100 px-2 py-1 rounded">Cerrado</span>}
+                  {state.matches.map((m, i) => {
+                    const blocked = isMatchLocked(m) || entryLocks[i];
+                    const blockLabel = entryLocks[i] ? 'Ya enviado' : 'Cerrado';
+                    return (
+                      <div key={m.id} className="rounded-xl bg-slate-950/35 p-3 border border-slate-700 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm text-slate-200 font-semibold">P{i + 1}: {m.homeTeam} vs {m.awayTeam || 'Rival'}</p>
+                          {blocked && <span className="text-[10px] uppercase bg-rose-800/70 text-rose-100 px-2 py-1 rounded">{blockLabel}</span>}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            value={entryPreds[i]?.home ?? ''}
+                            onChange={(e) => updateEntryPred(i, 'home', e.target.value)}
+                            placeholder="Local"
+                            disabled={blocked}
+                            className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            value={entryPreds[i]?.away ?? ''}
+                            onChange={(e) => updateEntryPred(i, 'away', e.target.value)}
+                            placeholder="Visitante"
+                            disabled={blocked}
+                            className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                          />
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="number"
-                          min="0"
-                          value={entryPreds[i]?.home ?? ''}
-                          onChange={(e) => updateEntryPred(i, 'home', e.target.value)}
-                          placeholder="Local"
-                          disabled={isMatchLocked(m)}
-                          className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          value={entryPreds[i]?.away ?? ''}
-                          onChange={(e) => updateEntryPred(i, 'away', e.target.value)}
-                          placeholder="Visitante"
-                          disabled={isMatchLocked(m)}
-                          className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
-                        />
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div className="flex gap-2 justify-end">
                   <button onClick={() => setEntryOpen(false)} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-4 py-2 text-sm">Cancelar</button>
@@ -1021,7 +1134,7 @@
                   <input
                     value={adminUser}
                     onChange={(e) => setAdminUser(e.target.value)}
-                    placeholder="ADMIN"
+                    placeholder="Usuario"
                     className="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
                   />
                 </div>
@@ -1031,7 +1144,7 @@
                     type="password"
                     value={adminPass}
                     onChange={(e) => setAdminPass(e.target.value)}
-                    placeholder="1234"
+                    placeholder="••••"
                     className="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
                   />
                 </div>
@@ -1095,10 +1208,10 @@
                       </div>
                       <button
                         onClick={() => openEntryModalForParticipant(p)}
-                        disabled={state.matches.every((m) => isMatchLocked(m))}
-                        className="tap-btn mt-3 w-full bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-2 text-sm font-semibold"
+                        disabled={state.matches.every((m) => isMatchLocked(m)) || (p.locked && p.locked.every(Boolean))}
+                        className="tap-btn mt-3 w-full bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-2 text-sm font-semibold disabled:opacity-50"
                       >
-                        {state.matches.every((m) => isMatchLocked(m)) ? 'Edición cerrada' : 'Poner resultado'}
+                        {(p.locked && p.locked.every(Boolean)) ? 'Pronóstico enviado ✓' : state.matches.every((m) => isMatchLocked(m)) ? 'Edición cerrada' : 'Poner resultado'}
                       </button>
                       {adminOpen && adminLogged && (
                         <button

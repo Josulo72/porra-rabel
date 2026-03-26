@@ -32,14 +32,44 @@ function setState_(state) {
 }
 
 /**
+ * Normaliza nombre de equipo: quita prefijos comunes (SD, CF, FC, CD, UD, etc.)
+ * y pasa a minúsculas para matching más fiable.
+ */
+function normalizeTeamName_(name) {
+  return String(name || '').toLowerCase()
+    .replace(/^(sd|cf|fc|cd|ud|ca|rc|rcd|real|deportivo|sociedad deportiva|club)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Compara dos nombres de equipo de forma flexible.
+ * Devuelve true si uno contiene al otro (tras normalizar).
+ */
+function teamsMatch_(name1, name2) {
+  var a = normalizeTeamName_(name1);
+  var b = normalizeTeamName_(name2);
+  if (!a || !b) return false;
+  // Coincidencia exacta tras normalizar
+  if (a === b) return true;
+  // Uno contiene al otro
+  if (a.indexOf(b) >= 0 || b.indexOf(a) >= 0) return true;
+  return false;
+}
+
+/**
  * Proxy de scraping: llama a TheSportsDB desde el servidor de Google
  * para evitar bloqueos CORS del navegador.
  * Busca el partido por nombre de equipo y devuelve el marcador si existe.
+ * Intenta múltiples estrategias de búsqueda.
  */
 function scrapeScores_(homeTeam, awayTeam) {
-  const queries = [
+  // Estrategia 1: buscar eventos por nombre completo
+  var queries = [
     homeTeam + ' vs ' + awayTeam,
     awayTeam + ' vs ' + homeTeam,
+    homeTeam,
+    awayTeam,
   ];
 
   for (var q = 0; q < queries.length; q++) {
@@ -51,21 +81,27 @@ function scrapeScores_(homeTeam, awayTeam) {
       });
       var data = JSON.parse(response.getContentText());
       var events = data && data.event ? data.event : [];
-      var homeLower = homeTeam.toLowerCase();
-      var awayLower = awayTeam.toLowerCase();
 
-      // Buscar el evento que mejor coincida
       for (var i = 0; i < events.length; i++) {
         var ev = events[i];
-        var evHome = (ev.strHomeTeam || '').toLowerCase();
-        var evAway = (ev.strAwayTeam || '').toLowerCase();
-        var homeMatch = evHome.indexOf(homeLower.split(' ')[0]) >= 0 || homeLower.indexOf(evHome.split(' ')[0]) >= 0;
-        var awayMatch = evAway.indexOf(awayLower.split(' ')[0]) >= 0 || awayLower.indexOf(evAway.split(' ')[0]) >= 0;
-        if (homeMatch && awayMatch && ev.intHomeScore !== null && ev.intHomeScore !== undefined && ev.intHomeScore !== '') {
+        var homeOk = teamsMatch_(ev.strHomeTeam, homeTeam);
+        var awayOk = teamsMatch_(ev.strAwayTeam, awayTeam);
+        // También probar invertido por si la API tiene local/visitante al revés
+        var homeOkInv = teamsMatch_(ev.strHomeTeam, awayTeam);
+        var awayOkInv = teamsMatch_(ev.strAwayTeam, homeTeam);
+
+        var matched = (homeOk && awayOk) || (homeOkInv && awayOkInv);
+        if (matched && ev.intHomeScore !== null && ev.intHomeScore !== undefined && ev.intHomeScore !== '') {
+          var hScore = parseInt(ev.intHomeScore, 10);
+          var aScore = parseInt(ev.intAwayScore, 10);
+          // Si el match fue invertido, invertir también los scores
+          if (homeOkInv && awayOkInv && !homeOk) {
+            var tmp = hScore; hScore = aScore; aScore = tmp;
+          }
           return {
             found: true,
-            home: parseInt(ev.intHomeScore, 10),
-            away: parseInt(ev.intAwayScore, 10),
+            home: hScore,
+            away: aScore,
             homeTeam: ev.strHomeTeam,
             awayTeam: ev.strAwayTeam,
             status: ev.strStatus || '',
@@ -77,6 +113,43 @@ function scrapeScores_(homeTeam, awayTeam) {
       // continúa con siguiente query
     }
   }
+
+  // Estrategia 2: buscar últimos eventos del equipo local por id
+  try {
+    var searchUrl = 'https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=' + encodeURIComponent(homeTeam);
+    var searchRes = UrlFetchApp.fetch(searchUrl, { muteHttpExceptions: true });
+    var searchData = JSON.parse(searchRes.getContentText());
+    var teams = searchData && searchData.teams ? searchData.teams : [];
+
+    for (var t = 0; t < teams.length; t++) {
+      if (!teamsMatch_(teams[t].strTeam, homeTeam)) continue;
+      var teamId = teams[t].idTeam;
+      var lastUrl = 'https://www.thesportsdb.com/api/v1/json/3/eventslast.php?id=' + teamId;
+      var lastRes = UrlFetchApp.fetch(lastUrl, { muteHttpExceptions: true });
+      var lastData = JSON.parse(lastRes.getContentText());
+      var lastEvents = lastData && lastData.results ? lastData.results : [];
+
+      for (var le = 0; le < lastEvents.length; le++) {
+        var lev = lastEvents[le];
+        if (teamsMatch_(lev.strAwayTeam, awayTeam) || teamsMatch_(lev.strHomeTeam, awayTeam)) {
+          if (lev.intHomeScore !== null && lev.intHomeScore !== undefined && lev.intHomeScore !== '') {
+            return {
+              found: true,
+              home: parseInt(lev.intHomeScore, 10),
+              away: parseInt(lev.intAwayScore, 10),
+              homeTeam: lev.strHomeTeam,
+              awayTeam: lev.strAwayTeam,
+              status: lev.strStatus || '',
+              event: lev.strEvent || ''
+            };
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // fallback silencioso
+  }
+
   return { found: false };
 }
 
@@ -101,17 +174,79 @@ function doGet(e) {
   return toJsonResponse({ ok: false, error: 'Unknown action' });
 }
 
+/**
+ * Actualiza un solo participante de forma atómica en el servidor.
+ * Usa LockService para evitar race conditions entre dos usuarios simultáneos.
+ */
+function updateParticipant_(participant) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000); // espera hasta 10s
+  try {
+    var state = getState_();
+    var participants = state.participants || [];
+    var idx = -1;
+
+    // Buscar por id primero, luego por nombre
+    for (var i = 0; i < participants.length; i++) {
+      if (participants[i].id === participant.id) { idx = i; break; }
+    }
+    if (idx < 0) {
+      var nameLower = (participant.name || '').trim().toLowerCase();
+      for (var i = 0; i < participants.length; i++) {
+        if ((participants[i].name || '').trim().toLowerCase() === nameLower) { idx = i; break; }
+      }
+    }
+
+    if (idx >= 0) {
+      // Merge: respetar locked del servidor
+      var existing = participants[idx];
+      var exPreds = existing.predictions || [{home:null,away:null},{home:null,away:null},{home:null,away:null}];
+      var exLocks = existing.locked || [false, false, false];
+      var newPreds = participant.predictions || [{home:null,away:null},{home:null,away:null},{home:null,away:null}];
+      var newLocks = participant.locked || [false, false, false];
+      var mergedPreds = [];
+      var mergedLocks = [];
+      for (var i = 0; i < 3; i++) {
+        if (exLocks[i]) {
+          mergedPreds.push(exPreds[i]);
+          mergedLocks.push(true);
+        } else {
+          mergedPreds.push(newPreds[i] || {home:null,away:null});
+          mergedLocks.push(newLocks[i] || false);
+        }
+      }
+      participants[idx] = {
+        id: existing.id,
+        name: existing.name,
+        predictions: mergedPreds,
+        locked: mergedLocks
+      };
+    } else {
+      // Nuevo participante
+      participants.push(participant);
+    }
+
+    state.participants = participants;
+    setState_(state);
+    return { ok: true, participant: participants[idx >= 0 ? idx : participants.length - 1] };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function doPost(e) {
   try {
     const params = (e && e.parameter) || {};
     let action = params.action || '';
     let state = null;
+    let participant = null;
 
     // Accept simple form posts (no CORS preflight) and raw JSON posts.
     if (!action && e && e.postData && e.postData.contents) {
       const body = JSON.parse(e.postData.contents || '{}');
       action = body.action || '';
       state = body.state || null;
+      participant = body.participant || null;
     } else if (params.state) {
       state = JSON.parse(params.state);
     }
@@ -120,6 +255,13 @@ function doPost(e) {
       setState_(state);
       return toJsonResponse({ ok: true });
     }
+
+    if (action === 'updateParticipant') {
+      if (!participant) return toJsonResponse({ ok: false, error: 'Falta participant' });
+      var result = updateParticipant_(participant);
+      return toJsonResponse(result);
+    }
+
     return toJsonResponse({ ok: false, error: 'Unknown action' });
   } catch (error) {
     return toJsonResponse({ ok: false, error: String(error) });
