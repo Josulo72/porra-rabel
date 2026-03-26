@@ -274,6 +274,8 @@
       const [waPhone, setWaPhone] = useState('');
       const [waApiKey, setWaApiKey] = useState('');
       const [waMsg, setWaMsg] = useState('');
+      const [tgConfig, setTgConfig] = useState({ enabled: false, botToken: '', chatId: '' });
+      const [tgMsg, setTgMsg] = useState('');
       const [scrapingEnabled, setScrapingEnabled] = useState(false);
       const [scrapeStatus, setScrapeStatus] = useState({
         level: 'off',
@@ -473,7 +475,32 @@
           setWaMsg('Mensaje de test enviado');
         } catch { setWaMsg('Error al enviar test'); }
       };
-      useEffect(() => { if (adminLogged) loadWaConfig(); }, [adminLogged]);
+      // Telegram config
+      const loadTgConfig = async () => {
+        if (!sharedApiConfigured()) return;
+        try {
+          const res = await fetch(`${API_BASE}?action=getTelegramConfig`);
+          const data = await res.json();
+          if (data?.config) setTgConfig(data.config);
+        } catch {}
+      };
+      const saveTgConfig = async (config) => {
+        if (!sharedApiConfigured()) return;
+        try {
+          await fetch(API_BASE, { method: 'POST', body: JSON.stringify({ action: 'setTelegramConfig', tgConfig: config }) });
+          setTgConfig(config);
+          setTgMsg('Configuración guardada');
+        } catch { setTgMsg('Error al guardar'); }
+      };
+      const testTg = async () => {
+        if (!sharedApiConfigured()) return;
+        try {
+          await fetch(API_BASE, { method: 'POST', body: JSON.stringify({ action: 'testTelegram' }) });
+          setTgMsg('Mensaje de test enviado');
+        } catch { setTgMsg('Error al enviar test'); }
+      };
+
+      useEffect(() => { if (adminLogged) { loadWaConfig(); loadTgConfig(); } }, [adminLogged]);
 
       const setMatchField = (index, field, value) => {
         setState((prev) => {
@@ -681,15 +708,36 @@
         return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
       };
 
+      // Service Worker registration
+      const swRef = useRef(null);
+      useEffect(() => {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('./sw.js').then((reg) => {
+            swRef.current = reg;
+          }).catch(() => {});
+        }
+      }, []);
+
       const requestNotifPermission = async () => {
         if (typeof Notification === 'undefined') return;
         const perm = await Notification.requestPermission();
         setNotifPermission(perm);
       };
 
-      const sendBrowserNotification = (title, body) => {
+      const sendBrowserNotification = (title, body, tag, persistent = false) => {
         if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-        try { new Notification(title, { body, icon: '⚽' }); } catch {}
+        // Usar Service Worker para que funcione con la web en segundo plano
+        if (swRef.current && swRef.current.active) {
+          swRef.current.active.postMessage({
+            type: 'SHOW_NOTIFICATION',
+            title,
+            body,
+            tag: tag || 'porra-' + Date.now(),
+            persistent,
+          });
+        } else {
+          try { new Notification(title, { body }); } catch {}
+        }
       };
 
       const showGoalToast = (teamHome, teamAway, homeScore, awayScore, changedSide) => {
@@ -697,9 +745,62 @@
           ? `⚽ GOL ${teamHome}! ${homeScore}-${awayScore}`
           : `⚽ GOL ${teamAway}! ${homeScore}-${awayScore}`;
         setGoalToast({ msg, full: `${teamHome} ${homeScore} - ${awayScore} ${teamAway}` });
-        sendBrowserNotification('⚽ ¡GOL en La Porra!', `${teamHome} ${homeScore} - ${awayScore} ${teamAway}`);
+        sendBrowserNotification('⚽ ¡GOL en La Porra!', `${teamHome} ${homeScore} - ${awayScore} ${teamAway}`, 'goal');
         setTimeout(() => setGoalToast(null), 5000);
       };
+
+      // Notificaciones de fases de partido (inicio, descanso, reanudación, final)
+      const matchPhaseRef = useRef({});
+      const checkMatchPhasesWeb = () => {
+        state.matches.forEach((match, idx) => {
+          if (!match.kickoff || !match.homeTeam || !match.awayTeam) return;
+          const ko = new Date(match.kickoff);
+          const elapsed = (now.getTime() - ko.getTime()) / 60000;
+          let phase = 'pre';
+          if (elapsed >= 0 && elapsed < 47) phase = 'first_half';
+          else if (elapsed >= 47 && elapsed < 63) phase = 'halftime';
+          else if (elapsed >= 63 && elapsed < 112) phase = 'second_half';
+          else if (elapsed >= 112) phase = 'fulltime';
+
+          const prev = matchPhaseRef.current[match.id];
+          if (prev === phase || phase === 'pre') return;
+          matchPhaseRef.current[match.id] = phase;
+          if (prev === undefined) return; // Primera vez, no notificar
+
+          const label = `${match.homeTeam} vs ${match.awayTeam}`;
+          const score = isResultSet(match.result) ? ` (${match.result.home}-${match.result.away})` : '';
+          let title = '', body = '';
+          switch (phase) {
+            case 'first_half':
+              title = '🟢 ¡Comienza el partido!';
+              body = `${label} — Predicciones cerradas`;
+              break;
+            case 'halftime':
+              title = '⏸️ Descanso';
+              body = `${label}${score}`;
+              break;
+            case 'second_half':
+              title = '🟢 ¡Se reanuda!';
+              body = `${label}${score}`;
+              break;
+            case 'fulltime':
+              title = '🏁 ¡Final del partido!';
+              body = `${label}${score} — ${aliveCount} supervivientes`;
+              break;
+          }
+          if (title) {
+            sendBrowserNotification(title, body, `phase-${match.id}`, phase === 'fulltime');
+            // También mostrar toast
+            setGoalToast({ msg: title, full: body });
+            setTimeout(() => setGoalToast(null), 6000);
+          }
+        });
+      };
+
+      // Comprobar fases cada vez que cambia "now" (cada segundo)
+      useEffect(() => {
+        checkMatchPhasesWeb();
+      }, [now]);
 
       const getTeamLogo = (teamName) => {
         const known = KNOWN_TEAM_LOGOS[normalizeTeamName(teamName)];
@@ -1260,6 +1361,41 @@
                   <button onClick={testWa} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5 text-xs">Enviar test</button>
                 </div>
                 {waMsg && <p className="text-xs text-cyan-300">{waMsg}</p>}
+              </div>
+
+              {/* Telegram Bot */}
+              <div className="rounded-lg bg-slate-950/40 border border-slate-800 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Telegram Bot (m&aacute;s f&aacute;cil)</p>
+                  <button onClick={() => saveTgConfig({ ...tgConfig, enabled: !tgConfig.enabled })} className={`tap-btn rounded px-3 py-1.5 text-xs ${tgConfig.enabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>
+                    {tgConfig.enabled ? 'ACTIVO' : 'INACTIVO'}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  1. Habla con <b>@BotFather</b> en Telegram → /newbot → copia el TOKEN<br/>
+                  2. Crea un grupo, mete al bot, envía un mensaje<br/>
+                  3. Visita: <i>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</i> → copia el chat_id<br/>
+                  4. Pega ambos aquí abajo. Tus amigos solo tienen que unirse al grupo.
+                </p>
+                <div className="grid grid-cols-1 gap-2">
+                  <input
+                    value={tgConfig.botToken}
+                    onChange={(e) => setTgConfig((c) => ({ ...c, botToken: e.target.value }))}
+                    placeholder="Bot Token (ej: 123456:ABC-DEF...)"
+                    className="bg-slate-900 border border-slate-700 rounded px-2 py-2 text-xs"
+                  />
+                  <input
+                    value={tgConfig.chatId}
+                    onChange={(e) => setTgConfig((c) => ({ ...c, chatId: e.target.value }))}
+                    placeholder="Chat ID del grupo (ej: -1001234567890)"
+                    className="bg-slate-900 border border-slate-700 rounded px-2 py-2 text-xs"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => saveTgConfig(tgConfig)} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-1.5 text-xs">Guardar</button>
+                  <button onClick={testTg} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5 text-xs">Enviar test</button>
+                </div>
+                {tgMsg && <p className="text-xs text-cyan-300">{tgMsg}</p>}
               </div>
             </section>
           )}

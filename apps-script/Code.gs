@@ -1,5 +1,6 @@
 const KEY = 'PORRA_SHARED_STATE_V1';
 const WHATSAPP_CONFIG_KEY = 'PORRA_WHATSAPP_CONFIG';
+const TELEGRAM_CONFIG_KEY = 'PORRA_TELEGRAM_CONFIG';
 const PREV_SCORES_KEY = 'PORRA_PREV_SCORES';
 const MATCH_PHASES_KEY = 'PORRA_MATCH_PHASES';
 
@@ -36,6 +37,56 @@ function sendWhatsApp_(message) {
       // no bloquear por error de un destinatario
     }
   }
+}
+
+/**
+ * Telegram Bot: envía mensajes a un grupo de Telegram automáticamente.
+ * Instrucciones para el admin:
+ * 1. Habla con @BotFather en Telegram → /newbot → te da un TOKEN
+ * 2. Crea un grupo de Telegram y mete al bot
+ * 3. Envía un mensaje en el grupo y luego visita:
+ *    https://api.telegram.org/bot<TOKEN>/getUpdates
+ *    para obtener el chat_id del grupo (número negativo)
+ * 4. Pon el token y chat_id en el panel admin de la Porra
+ */
+function getTelegramConfig_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(TELEGRAM_CONFIG_KEY);
+  if (!raw) return { enabled: false, botToken: '', chatId: '' };
+  try { return JSON.parse(raw); } catch (e) { return { enabled: false, botToken: '', chatId: '' }; }
+}
+
+function setTelegramConfig_(config) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(TELEGRAM_CONFIG_KEY, JSON.stringify(config || { enabled: false, botToken: '', chatId: '' }));
+}
+
+function sendTelegram_(message) {
+  var config = getTelegramConfig_();
+  if (!config.enabled || !config.botToken || !config.chatId) return;
+  try {
+    var url = 'https://api.telegram.org/bot' + config.botToken + '/sendMessage';
+    UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        chat_id: config.chatId,
+        text: message,
+        parse_mode: 'Markdown',
+      }),
+      muteHttpExceptions: true,
+    });
+  } catch (e) {
+    // no bloquear
+  }
+}
+
+/**
+ * Envía notificación por todos los canales configurados (WhatsApp + Telegram).
+ */
+function notifyAll_(message) {
+  sendWhatsApp_(message);
+  sendTelegram_(message);
 }
 
 function getPrevScores_() {
@@ -135,7 +186,7 @@ function checkMatchPhasesAndNotify_() {
         break;
     }
 
-    if (msg) sendWhatsApp_(msg);
+    if (msg) notifyAll_(msg);
   }
 
   if (changed) setMatchPhases_(phases);
@@ -407,7 +458,7 @@ function doGet(e) {
           }
         }
 
-        sendWhatsApp_(goalMsg);
+        notifyAll_(goalMsg);
       }
       prevScores[matchKey] = { home: result.home, away: result.away };
       setPrevScores_(prevScores);
@@ -422,6 +473,11 @@ function doGet(e) {
   // Configuración WhatsApp
   if (action === 'getWhatsAppConfig') {
     return toJsonResponse({ ok: true, config: getWhatsAppConfig_() });
+  }
+
+  // Configuración Telegram
+  if (action === 'getTelegramConfig') {
+    return toJsonResponse({ ok: true, config: getTelegramConfig_() });
   }
 
   return toJsonResponse({ ok: false, error: 'Unknown action' });
@@ -495,6 +551,7 @@ function doPost(e) {
     let participant = null;
 
     let waConfig = null;
+    let tgConfig = null;
 
     // Accept simple form posts (no CORS preflight) and raw JSON posts.
     if (!action && e && e.postData && e.postData.contents) {
@@ -503,6 +560,7 @@ function doPost(e) {
       state = body.state || null;
       participant = body.participant || null;
       waConfig = body.waConfig || null;
+      tgConfig = body.tgConfig || null;
     } else if (params.state) {
       state = JSON.parse(params.state);
     }
@@ -536,6 +594,17 @@ function doPost(e) {
 
     if (action === 'testWhatsApp') {
       sendWhatsApp_('🏆 Test La Porra de Supervivencia: ¡WhatsApp automático configurado correctamente!');
+      return toJsonResponse({ ok: true });
+    }
+
+    if (action === 'setTelegramConfig') {
+      if (!tgConfig) return toJsonResponse({ ok: false, error: 'Falta tgConfig' });
+      setTelegramConfig_(tgConfig);
+      return toJsonResponse({ ok: true });
+    }
+
+    if (action === 'testTelegram') {
+      sendTelegram_('🏆 Test La Porra de Supervivencia: ¡Telegram configurado correctamente!');
       return toJsonResponse({ ok: true });
     }
 
