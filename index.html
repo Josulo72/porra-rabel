@@ -267,6 +267,13 @@
       const [logs, setLogs] = useState([]);
       const [logoCache, setLogoCache] = useState({});
       const [flashMap, setFlashMap] = useState({});
+      const [goalToast, setGoalToast] = useState(null);
+      const [now, setNow] = useState(new Date());
+      const [notifPermission, setNotifPermission] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'denied');
+      const [waConfig, setWaConfig] = useState({ enabled: false, recipients: [] });
+      const [waPhone, setWaPhone] = useState('');
+      const [waApiKey, setWaApiKey] = useState('');
+      const [waMsg, setWaMsg] = useState('');
       const [scrapingEnabled, setScrapingEnabled] = useState(false);
       const [scrapeStatus, setScrapeStatus] = useState({
         level: 'off',
@@ -355,6 +362,12 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       }, [state]);
 
+      // Tick cada segundo para countdown
+      useEffect(() => {
+        const id = setInterval(() => setNow(new Date()), 1000);
+        return () => clearInterval(id);
+      }, []);
+
       useEffect(() => {
         if (storageMode !== 'shared') return;
         if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -420,6 +433,47 @@
       }, [state.participants, state.matches]);
 
       const aliveCount = evaluatedParticipants.filter((p) => p.status === 'alive').length;
+
+      // WhatsApp config
+      const loadWaConfig = async () => {
+        if (!sharedApiConfigured()) return;
+        try {
+          const res = await fetch(`${API_BASE}?action=getWhatsAppConfig`);
+          const data = await res.json();
+          if (data?.config) setWaConfig(data.config);
+        } catch {}
+      };
+      const saveWaConfig = async (config) => {
+        if (!sharedApiConfigured()) return;
+        try {
+          await fetch(API_BASE, { method: 'POST', body: JSON.stringify({ action: 'setWhatsAppConfig', waConfig: config }) });
+          setWaConfig(config);
+          setWaMsg('Configuración guardada');
+        } catch { setWaMsg('Error al guardar'); }
+      };
+      const addWaRecipient = () => {
+        if (!waPhone || !waApiKey) { setWaMsg('Rellena teléfono y API key'); return; }
+        const next = { ...waConfig, recipients: [...(waConfig.recipients || []), { phone: waPhone, apikey: waApiKey }] };
+        saveWaConfig(next);
+        setWaPhone('');
+        setWaApiKey('');
+      };
+      const removeWaRecipient = (idx) => {
+        const next = { ...waConfig, recipients: waConfig.recipients.filter((_, i) => i !== idx) };
+        saveWaConfig(next);
+      };
+      const toggleWa = () => {
+        const next = { ...waConfig, enabled: !waConfig.enabled };
+        saveWaConfig(next);
+      };
+      const testWa = async () => {
+        if (!sharedApiConfigured()) return;
+        try {
+          await fetch(API_BASE, { method: 'POST', body: JSON.stringify({ action: 'testWhatsApp' }) });
+          setWaMsg('Mensaje de test enviado');
+        } catch { setWaMsg('Error al enviar test'); }
+      };
+      useEffect(() => { if (adminLogged) loadWaConfig(); }, [adminLogged]);
 
       const setMatchField = (index, field, value) => {
         setState((prev) => {
@@ -612,6 +666,41 @@
         return { level: 'ended', text: 'Partido terminado — pendiente resultado' };
       };
 
+      const getCountdown = (match) => {
+        if (!match.kickoff) return null;
+        const ko = new Date(match.kickoff);
+        const diff = ko.getTime() - now.getTime();
+        if (diff <= 0) return null; // ya empezó
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        if (h > 24) {
+          const days = Math.floor(h / 24);
+          return `${days}d ${h % 24}h`;
+        }
+        return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+      };
+
+      const requestNotifPermission = async () => {
+        if (typeof Notification === 'undefined') return;
+        const perm = await Notification.requestPermission();
+        setNotifPermission(perm);
+      };
+
+      const sendBrowserNotification = (title, body) => {
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        try { new Notification(title, { body, icon: '⚽' }); } catch {}
+      };
+
+      const showGoalToast = (teamHome, teamAway, homeScore, awayScore, changedSide) => {
+        const msg = changedSide === 'home'
+          ? `⚽ GOL ${teamHome}! ${homeScore}-${awayScore}`
+          : `⚽ GOL ${teamAway}! ${homeScore}-${awayScore}`;
+        setGoalToast({ msg, full: `${teamHome} ${homeScore} - ${awayScore} ${teamAway}` });
+        sendBrowserNotification('⚽ ¡GOL en La Porra!', `${teamHome} ${homeScore} - ${awayScore} ${teamAway}`);
+        setTimeout(() => setGoalToast(null), 5000);
+      };
+
       const getTeamLogo = (teamName) => {
         const known = KNOWN_TEAM_LOGOS[normalizeTeamName(teamName)];
         return known || logoCache[teamName] || null;
@@ -659,8 +748,19 @@
             const prevKey = `${match.id}`;
             const prev = previousScores.current[prevKey];
 
-            if (!prev || prev.home !== home) flashGoal(match.id, 'home');
-            if (!prev || prev.away !== away) flashGoal(match.id, 'away');
+            if (prev && prev.home !== home) {
+              flashGoal(match.id, 'home');
+              showGoalToast(match.homeTeam, match.awayTeam, home, away, 'home');
+            }
+            if (prev && prev.away !== away) {
+              flashGoal(match.id, 'away');
+              showGoalToast(match.homeTeam, match.awayTeam, home, away, 'away');
+            }
+            if (!prev) {
+              // Primera vez que obtenemos marcador, no es gol nuevo
+              flashGoal(match.id, 'home');
+              flashGoal(match.id, 'away');
+            }
             previousScores.current[prevKey] = { home, away };
 
             setState((prevState) => {
@@ -950,6 +1050,16 @@
                       <span className={`inline-block w-2.5 h-2.5 rounded-full ${phaseDot}`} />
                       <span className="text-slate-200">{phase.text}</span>
                     </div>
+                    {(() => {
+                      const cd = getCountdown(match);
+                      if (!cd) return null;
+                      return (
+                        <div className="mt-2 bg-amber-500/20 border border-amber-500/40 rounded-lg px-3 py-2 text-center">
+                          <p className="text-[10px] uppercase tracking-wider text-amber-300/80">Predicciones cierran en</p>
+                          <p className="text-lg font-bold text-amber-200 font-mono">{cd}</p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </article>
               );
@@ -1122,6 +1232,35 @@
                   {logs.length ? logs.map((l, i) => <div key={i}>{l}</div>) : <div className="text-slate-500">Sin eventos todavía</div>}
                 </div>
               </div>
+
+              {/* WhatsApp automático */}
+              <div className="rounded-lg bg-slate-950/40 border border-slate-800 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">WhatsApp automático (CallMeBot)</p>
+                  <button onClick={toggleWa} className={`tap-btn rounded px-3 py-1.5 text-xs ${waConfig.enabled ? 'bg-emerald-700' : 'bg-slate-700'}`}>
+                    {waConfig.enabled ? 'ACTIVO' : 'INACTIVO'}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  Cada destinatario debe activarse primero enviando un mensaje a CallMeBot.
+                  <a href="https://www.callmebot.com/blog/free-api-whatsapp-messages/" target="_blank" className="text-cyan-400 ml-1 underline">Ver instrucciones</a>
+                </p>
+                {(waConfig.recipients || []).map((r, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs bg-slate-900 rounded px-2 py-1.5">
+                    <span className="text-slate-200 flex-1">📱 {r.phone}</span>
+                    <button onClick={() => removeWaRecipient(i)} className="text-rose-400 hover:text-rose-300">Quitar</button>
+                  </div>
+                ))}
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={waPhone} onChange={(e) => setWaPhone(e.target.value)} placeholder="+34600123456" className="bg-slate-900 border border-slate-700 rounded px-2 py-2 text-xs" />
+                  <input value={waApiKey} onChange={(e) => setWaApiKey(e.target.value)} placeholder="API Key" className="bg-slate-900 border border-slate-700 rounded px-2 py-2 text-xs" />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={addWaRecipient} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-1.5 text-xs">Añadir destinatario</button>
+                  <button onClick={testWa} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-3 py-1.5 text-xs">Enviar test</button>
+                </div>
+                {waMsg && <p className="text-xs text-cyan-300">{waMsg}</p>}
+              </div>
             </section>
           )}
 
@@ -1167,7 +1306,24 @@
           <section>
             <h2 className="mb-3 text-lg font-bold text-slate-200">Participantes</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-              {evaluatedParticipants.map((p) => (
+              {[...evaluatedParticipants].sort((a, b) => {
+                // Vivos primero, luego eliminados
+                if (a.status === 'alive' && b.status !== 'alive') return -1;
+                if (a.status !== 'alive' && b.status === 'alive') return 1;
+                // Entre eliminados: eliminado más tarde = mejor posición (arriba)
+                if (a.status === 'eliminated' && b.status === 'eliminated') {
+                  if ((b.eliminatedAt || 0) !== (a.eliminatedAt || 0)) return (b.eliminatedAt || 0) - (a.eliminatedAt || 0);
+                }
+                // Entre vivos: con pronóstico completo primero
+                if (a.status === 'alive' && b.status === 'alive') {
+                  const aFull = a.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+                  const bFull = b.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+                  if (aFull && !bFull) return -1;
+                  if (!aFull && bFull) return 1;
+                }
+                // Mismo grupo: alfabético
+                return a.name.localeCompare(b.name);
+              }).map((p) => (
                 (() => {
                   const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
                   const lightClass = p.status === 'eliminated'
@@ -1200,11 +1356,21 @@
                         {p.status === 'alive' ? 'Sigue con vida' : `ELIMINADO en Partido ${p.eliminatedAt}`}
                       </p>
                       <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
-                        {p.predictions.map((pr, i) => (
-                          <div key={i} className="bg-slate-950/65 rounded px-2 py-1 text-center border border-slate-800">
-                            {pr.home ?? '-'}-{pr.away ?? '-'}
-                          </div>
-                        ))}
+                        {p.predictions.map((pr, i) => {
+                          const mr = state.matches[i]?.result;
+                          const hasResult = mr && Number.isInteger(mr.home) && Number.isInteger(mr.away);
+                          const hasPred = pr && Number.isInteger(pr.home) && Number.isInteger(pr.away);
+                          const hit = hasResult && hasPred && Number(pr.home) === mr.home && Number(pr.away) === mr.away;
+                          const miss = hasResult && (!hasPred || !hit);
+                          const borderColor = hit ? 'border-lime-500 bg-lime-950/40' : miss ? 'border-rose-500/60 bg-rose-950/30' : 'border-slate-800 bg-slate-950/65';
+                          return (
+                            <div key={i} className={`rounded px-2 py-1 text-center border ${borderColor}`}>
+                              {pr.home ?? '-'}-{pr.away ?? '-'}
+                              {hit && <span className="ml-1 text-lime-400">✓</span>}
+                              {miss && <span className="ml-1 text-rose-400">✗</span>}
+                            </div>
+                          );
+                        })}
                       </div>
                       <button
                         onClick={() => openEntryModalForParticipant(p)}
@@ -1227,6 +1393,26 @@
               ))}
             </div>
           </section>
+
+          {/* Toast de gol */}
+          {goalToast && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] animate-bounce">
+              <div className="bg-gradient-to-r from-lime-600 to-emerald-600 text-white px-6 py-4 rounded-2xl shadow-2xl border-2 border-lime-300/50 text-center min-w-[280px]">
+                <p className="text-2xl font-extrabold">{goalToast.msg}</p>
+                <p className="text-sm mt-1 opacity-90">{goalToast.full}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Botón fijo de notificaciones */}
+          {notifPermission !== 'granted' && typeof Notification !== 'undefined' && (
+            <button
+              onClick={requestNotifPermission}
+              className="fixed bottom-4 right-4 z-50 bg-cyan-700 hover:bg-cyan-600 text-white rounded-full px-4 py-3 text-xs font-semibold shadow-lg"
+            >
+              🔔 Activar notificaciones de gol
+            </button>
+          )}
         </div>
       );
     }

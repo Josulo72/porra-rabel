@@ -1,4 +1,53 @@
 const KEY = 'PORRA_SHARED_STATE_V1';
+const WHATSAPP_CONFIG_KEY = 'PORRA_WHATSAPP_CONFIG';
+const PREV_SCORES_KEY = 'PORRA_PREV_SCORES';
+
+/**
+ * CallMeBot WhatsApp: configuración y envío automático de mensajes.
+ * Cada destinatario necesita activarse una vez en https://www.callmebot.com/blog/free-api-whatsapp-messages/
+ * Envía un WhatsApp gratis con: https://api.callmebot.com/whatsapp.php?phone=NUMERO&text=MENSAJE&apikey=APIKEY
+ */
+function getWhatsAppConfig_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(WHATSAPP_CONFIG_KEY);
+  if (!raw) return { enabled: false, recipients: [] };
+  try { return JSON.parse(raw); } catch (e) { return { enabled: false, recipients: [] }; }
+}
+
+function setWhatsAppConfig_(config) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(WHATSAPP_CONFIG_KEY, JSON.stringify(config || { enabled: false, recipients: [] }));
+}
+
+function sendWhatsApp_(message) {
+  var config = getWhatsAppConfig_();
+  if (!config.enabled || !config.recipients || !config.recipients.length) return;
+  var encoded = encodeURIComponent(message);
+  for (var r = 0; r < config.recipients.length; r++) {
+    try {
+      var rec = config.recipients[r];
+      if (!rec.phone || !rec.apikey) continue;
+      var url = 'https://api.callmebot.com/whatsapp.php?phone=' + encodeURIComponent(rec.phone) + '&text=' + encoded + '&apikey=' + encodeURIComponent(rec.apikey);
+      UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      // CallMeBot rate limit: 1 msg/sec por número
+      Utilities.sleep(1500);
+    } catch (e) {
+      // no bloquear por error de un destinatario
+    }
+  }
+}
+
+function getPrevScores_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(PREV_SCORES_KEY);
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch (e) { return {}; }
+}
+
+function setPrevScores_(scores) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(PREV_SCORES_KEY, JSON.stringify(scores || {}));
+}
 
 const DEFAULT_STATE = {
   matches: [
@@ -168,7 +217,55 @@ function doGet(e) {
       return toJsonResponse({ ok: false, error: 'Faltan parámetros home/away' });
     }
     var result = scrapeScores_(home, away);
+
+    // Detección de gol: comparar con marcador anterior y enviar WhatsApp
+    if (result.found) {
+      var prevScores = getPrevScores_();
+      var matchKey = home.toLowerCase() + '_vs_' + away.toLowerCase();
+      var prev = prevScores[matchKey];
+      if (prev && (prev.home !== result.home || prev.away !== result.away)) {
+        // ¡Gol detectado! Enviar WhatsApp
+        var goalMsg = '⚽ *GOL en La Porra!*\n' + home + ' ' + result.home + ' - ' + result.away + ' ' + away;
+
+        // Comprobar eliminados
+        var state = getState_();
+        var eliminated = [];
+        if (state.participants && state.participants.length) {
+          var matchIdx = -1;
+          for (var mi = 0; mi < state.matches.length; mi++) {
+            if (state.matches[mi].homeTeam.toLowerCase() === home.toLowerCase()) { matchIdx = mi; break; }
+          }
+          if (matchIdx >= 0) {
+            for (var pi = 0; pi < state.participants.length; pi++) {
+              var p = state.participants[pi];
+              var pred = p.predictions && p.predictions[matchIdx];
+              if (pred && pred.home !== null && pred.away !== null) {
+                if (Number(pred.home) !== result.home || Number(pred.away) !== result.away) {
+                  eliminated.push(p.name);
+                }
+              }
+            }
+          }
+        }
+        if (eliminated.length) {
+          goalMsg += '\n\n💀 *Eliminados (' + eliminated.length + '):* ' + eliminated.join(', ');
+        }
+
+        var aliveCount = (state.participants || []).length - eliminated.length;
+        goalMsg += '\n🏆 Quedan *' + aliveCount + '* supervivientes';
+
+        sendWhatsApp_(goalMsg);
+      }
+      prevScores[matchKey] = { home: result.home, away: result.away };
+      setPrevScores_(prevScores);
+    }
+
     return toJsonResponse({ ok: true, result: result });
+  }
+
+  // Configuración WhatsApp
+  if (action === 'getWhatsAppConfig') {
+    return toJsonResponse({ ok: true, config: getWhatsAppConfig_() });
   }
 
   return toJsonResponse({ ok: false, error: 'Unknown action' });
@@ -241,12 +338,15 @@ function doPost(e) {
     let state = null;
     let participant = null;
 
+    let waConfig = null;
+
     // Accept simple form posts (no CORS preflight) and raw JSON posts.
     if (!action && e && e.postData && e.postData.contents) {
       const body = JSON.parse(e.postData.contents || '{}');
       action = body.action || '';
       state = body.state || null;
       participant = body.participant || null;
+      waConfig = body.waConfig || null;
     } else if (params.state) {
       state = JSON.parse(params.state);
     }
@@ -260,6 +360,17 @@ function doPost(e) {
       if (!participant) return toJsonResponse({ ok: false, error: 'Falta participant' });
       var result = updateParticipant_(participant);
       return toJsonResponse(result);
+    }
+
+    if (action === 'setWhatsAppConfig') {
+      if (!waConfig) return toJsonResponse({ ok: false, error: 'Falta waConfig' });
+      setWhatsAppConfig_(waConfig);
+      return toJsonResponse({ ok: true });
+    }
+
+    if (action === 'testWhatsApp') {
+      sendWhatsApp_('🏆 Test La Porra de Supervivencia: ¡WhatsApp automático configurado correctamente!');
+      return toJsonResponse({ ok: true });
     }
 
     return toJsonResponse({ ok: false, error: 'Unknown action' });
