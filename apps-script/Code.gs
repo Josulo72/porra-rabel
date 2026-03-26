@@ -1,6 +1,7 @@
 const KEY = 'PORRA_SHARED_STATE_V1';
 const WHATSAPP_CONFIG_KEY = 'PORRA_WHATSAPP_CONFIG';
 const PREV_SCORES_KEY = 'PORRA_PREV_SCORES';
+const MATCH_PHASES_KEY = 'PORRA_MATCH_PHASES';
 
 /**
  * CallMeBot WhatsApp: configuración y envío automático de mensajes.
@@ -47,6 +48,169 @@ function getPrevScores_() {
 function setPrevScores_(scores) {
   var props = PropertiesService.getScriptProperties();
   props.setProperty(PREV_SCORES_KEY, JSON.stringify(scores || {}));
+}
+
+function getMatchPhases_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(MATCH_PHASES_KEY);
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch (e) { return {}; }
+}
+
+function setMatchPhases_(phases) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(MATCH_PHASES_KEY, JSON.stringify(phases || {}));
+}
+
+/**
+ * Calcula la fase actual de un partido basándose en la hora de kickoff.
+ * Fases: 'pre' → 'first_half' → 'halftime' → 'second_half' → 'fulltime'
+ * Tiempos aproximados:
+ *   Kickoff = inicio primera parte
+ *   +47 min = descanso (45 min + 2 de añadido aprox)
+ *   +63 min = inicio segunda parte (~15 min de descanso)
+ *   +112 min = final del partido (45+2 + 15 + 45+5 aprox)
+ */
+function getMatchPhaseByTime_(kickoff) {
+  if (!kickoff) return 'pre';
+  var now = new Date();
+  var ko = new Date(kickoff);
+  var elapsed = (now.getTime() - ko.getTime()) / 60000; // minutos desde kickoff
+
+  if (elapsed < 0) return 'pre';
+  if (elapsed < 47) return 'first_half';
+  if (elapsed < 63) return 'halftime';
+  if (elapsed < 112) return 'second_half';
+  return 'fulltime';
+}
+
+/**
+ * Comprueba las fases de todos los partidos y envía WhatsApp si hay transición.
+ * Se llama cada vez que se hace scraping.
+ */
+function checkMatchPhasesAndNotify_() {
+  var state = getState_();
+  var phases = getMatchPhases_();
+  var changed = false;
+
+  for (var i = 0; i < state.matches.length; i++) {
+    var match = state.matches[i];
+    if (!match.kickoff || !match.homeTeam || !match.awayTeam) continue;
+
+    var key = match.id;
+    var prevPhase = phases[key] || 'pre';
+    var currentPhase = getMatchPhaseByTime_(match.kickoff);
+
+    if (currentPhase === prevPhase) continue;
+
+    // Detectada transición de fase
+    phases[key] = currentPhase;
+    changed = true;
+
+    var label = match.homeTeam + ' vs ' + match.awayTeam;
+    var scoreText = '';
+    if (match.result && match.result.home !== null && match.result.away !== null) {
+      scoreText = ' (' + match.result.home + '-' + match.result.away + ')';
+    }
+
+    var msg = '';
+    switch (currentPhase) {
+      case 'first_half':
+        msg = '🟢 *¡COMIENZA EL PARTIDO!*\n⚽ ' + label + '\n\nPredicciones cerradas. ¡Suerte a todos!';
+        break;
+      case 'halftime':
+        msg = '⏸️ *DESCANSO*\n⚽ ' + label + scoreText + '\n\nVolvemos en 15 minutos.';
+        // Añadir resumen de supervivientes
+        var alive1 = countAlive_(state, i);
+        if (alive1 !== null) msg += '\n🏆 ' + alive1.alive + '/' + alive1.total + ' supervivientes';
+        break;
+      case 'second_half':
+        msg = '🟢 *¡SE REANUDA EL PARTIDO!*\n⚽ ' + label + scoreText;
+        break;
+      case 'fulltime':
+        msg = '🏁 *¡FINAL DEL PARTIDO!*\n⚽ ' + label + scoreText;
+        // Resumen completo de eliminados
+        var summary = getMatchSummary_(state, i);
+        if (summary) msg += '\n\n' + summary;
+        break;
+    }
+
+    if (msg) sendWhatsApp_(msg);
+  }
+
+  if (changed) setMatchPhases_(phases);
+}
+
+/**
+ * Cuenta participantes vivos hasta el partido i (inclusive).
+ */
+function countAlive_(state, upToMatch) {
+  if (!state.participants || !state.participants.length) return null;
+  var alive = 0;
+  var total = state.participants.length;
+  for (var p = 0; p < state.participants.length; p++) {
+    var isAlive = true;
+    for (var m = 0; m <= upToMatch; m++) {
+      var mr = state.matches[m] && state.matches[m].result;
+      if (!mr || mr.home === null || mr.away === null) continue;
+      var pred = state.participants[p].predictions && state.participants[p].predictions[m];
+      if (!pred || pred.home === null || pred.away === null ||
+          Number(pred.home) !== mr.home || Number(pred.away) !== mr.away) {
+        isAlive = false;
+        break;
+      }
+    }
+    if (isAlive) alive++;
+  }
+  return { alive: alive, total: total };
+}
+
+/**
+ * Genera resumen de eliminados y supervivientes para un partido.
+ */
+function getMatchSummary_(state, matchIdx) {
+  var mr = state.matches[matchIdx] && state.matches[matchIdx].result;
+  if (!mr || mr.home === null || mr.away === null) return '';
+
+  var eliminated = [];
+  var survived = [];
+  for (var p = 0; p < state.participants.length; p++) {
+    var part = state.participants[p];
+    // Comprobar si ya estaba eliminado en partidos anteriores
+    var alreadyDead = false;
+    for (var m = 0; m < matchIdx; m++) {
+      var prevR = state.matches[m] && state.matches[m].result;
+      if (!prevR || prevR.home === null) continue;
+      var prevPred = part.predictions && part.predictions[m];
+      if (!prevPred || prevPred.home === null || prevPred.away === null ||
+          Number(prevPred.home) !== prevR.home || Number(prevPred.away) !== prevR.away) {
+        alreadyDead = true;
+        break;
+      }
+    }
+    if (alreadyDead) continue; // ya estaba eliminado antes
+
+    var pred = part.predictions && part.predictions[matchIdx];
+    if (!pred || pred.home === null || pred.away === null ||
+        Number(pred.home) !== mr.home || Number(pred.away) !== mr.away) {
+      eliminated.push(part.name);
+    } else {
+      survived.push(part.name);
+    }
+  }
+
+  var lines = [];
+  lines.push('📊 *Resultado: ' + mr.home + '-' + mr.away + '*');
+  if (eliminated.length) {
+    lines.push('💀 *Eliminados (' + eliminated.length + '):* ' + eliminated.join(', '));
+  } else {
+    lines.push('🎉 ¡Nadie eliminado en este partido!');
+  }
+  lines.push('🏆 *Supervivientes: ' + survived.length + '/' + (survived.length + eliminated.length) + '*');
+  if (survived.length && survived.length <= 10) {
+    lines.push('✅ ' + survived.join(', '));
+  }
+  return lines.join('\n');
 }
 
 const DEFAULT_STATE = {
@@ -227,38 +391,30 @@ function doGet(e) {
         // ¡Gol detectado! Enviar WhatsApp
         var goalMsg = '⚽ *GOL en La Porra!*\n' + home + ' ' + result.home + ' - ' + result.away + ' ' + away;
 
-        // Comprobar eliminados
+        // Contar supervivientes con la función correcta (considera partidos anteriores)
         var state = getState_();
-        var eliminated = [];
-        if (state.participants && state.participants.length) {
-          var matchIdx = -1;
-          for (var mi = 0; mi < state.matches.length; mi++) {
-            if (state.matches[mi].homeTeam.toLowerCase() === home.toLowerCase()) { matchIdx = mi; break; }
-          }
-          if (matchIdx >= 0) {
-            for (var pi = 0; pi < state.participants.length; pi++) {
-              var p = state.participants[pi];
-              var pred = p.predictions && p.predictions[matchIdx];
-              if (pred && pred.home !== null && pred.away !== null) {
-                if (Number(pred.home) !== result.home || Number(pred.away) !== result.away) {
-                  eliminated.push(p.name);
-                }
-              }
-            }
+        var matchIdx = -1;
+        for (var mi = 0; mi < state.matches.length; mi++) {
+          if (state.matches[mi].homeTeam.toLowerCase() === home.toLowerCase()) { matchIdx = mi; break; }
+        }
+        if (matchIdx >= 0) {
+          // Actualizar resultado temporalmente para calcular
+          state.matches[matchIdx].result = { home: result.home, away: result.away };
+          var counts = countAlive_(state, matchIdx);
+          if (counts) {
+            var elimNow = counts.total - counts.alive;
+            goalMsg += '\n🏆 Quedan *' + counts.alive + '/' + counts.total + '* supervivientes';
           }
         }
-        if (eliminated.length) {
-          goalMsg += '\n\n💀 *Eliminados (' + eliminated.length + '):* ' + eliminated.join(', ');
-        }
-
-        var aliveCount = (state.participants || []).length - eliminated.length;
-        goalMsg += '\n🏆 Quedan *' + aliveCount + '* supervivientes';
 
         sendWhatsApp_(goalMsg);
       }
       prevScores[matchKey] = { home: result.home, away: result.away };
       setPrevScores_(prevScores);
     }
+
+    // Comprobar fases del partido y notificar (inicio, descanso, reanudación, final)
+    checkMatchPhasesAndNotify_();
 
     return toJsonResponse({ ok: true, result: result });
   }
@@ -353,6 +509,16 @@ function doPost(e) {
 
     if (action === 'setState') {
       setState_(state);
+      // Si todos los resultados están vacíos (reset jornada), limpiar fases y scores previos
+      if (state && state.matches) {
+        var allEmpty = state.matches.every(function(m) {
+          return !m.result || m.result.home === null || m.result.home === undefined;
+        });
+        if (allEmpty) {
+          setMatchPhases_({});
+          setPrevScores_({});
+        }
+      }
       return toJsonResponse({ ok: true });
     }
 
