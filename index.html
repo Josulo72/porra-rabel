@@ -297,7 +297,6 @@
       const [entryLocks, setEntryLocks] = useState([false, false, false]);
       const [submitMsg, setSubmitMsg] = useState('');
       const [storageMode, setStorageMode] = useState('init');
-      const previousScores = useRef({});
       const saveTimer = useRef(null);
 
       const sharedApiConfigured = () => API_BASE && !API_BASE.includes('REEMPLAZAR_CON_TU_DEPLOY');
@@ -780,6 +779,43 @@
       };
 
       // Notificaciones de fases de partido (inicio, descanso, reanudación, final)
+      // Detección universal de goles: funciona tanto con scraping como con entrada manual
+      const prevResultsRef = useRef(null);
+      useEffect(() => {
+        // Inicializar en la primera carga sin notificar
+        if (prevResultsRef.current === null) {
+          prevResultsRef.current = state.matches.map((m) => ({
+            home: m.result.home,
+            away: m.result.away,
+          }));
+          return;
+        }
+        state.matches.forEach((m, idx) => {
+          const prev = prevResultsRef.current[idx];
+          const curr = m.result;
+          if (!prev || !isResultSet(curr)) return;
+          // Detectar cambio de marcador (solo si el anterior también era válido — evita notificar al poner el primer resultado)
+          if (isResultSet({ home: prev.home, away: prev.away })) {
+            if (prev.home !== curr.home) {
+              flashGoal(m.id, 'home');
+              showGoalToast(m.homeTeam, m.awayTeam, curr.home, curr.away, 'home');
+            }
+            if (prev.away !== curr.away) {
+              flashGoal(m.id, 'away');
+              showGoalToast(m.homeTeam, m.awayTeam, curr.home, curr.away, 'away');
+            }
+          } else if (!isResultSet({ home: prev.home, away: prev.away }) && isResultSet(curr)) {
+            // Primera vez que se establece resultado completo — flash pero sin notificación de gol
+            flashGoal(m.id, 'home');
+            flashGoal(m.id, 'away');
+          }
+        });
+        prevResultsRef.current = state.matches.map((m) => ({
+          home: m.result.home,
+          away: m.result.away,
+        }));
+      }, [state.matches.map((m) => `${m.result.home}|${m.result.away}`).join(',')]);
+
       const matchPhaseRef = useRef(null);
       const checkMatchPhasesWeb = () => {
         // Inicializar fases en el primer tick para no notificar al cargar la página
@@ -900,24 +936,7 @@
               pushLog(`Partido ${idx + 1}: marcador inválido recibido`);
               return { ok: false, reason: 'nodata' };
             }
-            const prevKey = `${match.id}`;
-            const prev = previousScores.current[prevKey];
-
-            if (prev && prev.home !== home) {
-              flashGoal(match.id, 'home');
-              showGoalToast(match.homeTeam, match.awayTeam, home, away, 'home');
-            }
-            if (prev && prev.away !== away) {
-              flashGoal(match.id, 'away');
-              showGoalToast(match.homeTeam, match.awayTeam, home, away, 'away');
-            }
-            if (!prev) {
-              // Primera vez que obtenemos marcador, no es gol nuevo
-              flashGoal(match.id, 'home');
-              flashGoal(match.id, 'away');
-            }
-            previousScores.current[prevKey] = { home, away };
-
+            // La detección de goles se hace en el useEffect universal (prevResultsRef)
             setState((prevState) => {
               const matches = [...prevState.matches];
               matches[idx] = {
@@ -1121,7 +1140,7 @@
             locked: [false, false, false],
           })),
         }));
-        previousScores.current = {};
+        prevResultsRef.current = null; // Se reinicializará en el próximo render
         pushLog('Jornada reseteada (resultados y pronósticos)');
       };
 
