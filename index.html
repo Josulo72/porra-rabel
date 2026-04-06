@@ -44,8 +44,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
@@ -140,7 +140,10 @@
       return Number.isFinite(n) ? n : null;
     };
 
-    const normalizeTeamName = (name) => String(name || '').trim().toLowerCase();
+    const normalizeTeamName = (name) => String(name || '').toLowerCase()
+      .replace(/^(sd|cf|fc|cd|ud|ca|rc|rcd|real|deportivo|sociedad deportiva|club)\s+/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
 
     const isResultSet = (result) => Number.isInteger(result.home) && Number.isInteger(result.away);
 
@@ -276,7 +279,9 @@
       const [waMsg, setWaMsg] = useState('');
       const [tgConfig, setTgConfig] = useState({ enabled: false, botToken: '', chatId: '' });
       const [tgMsg, setTgMsg] = useState('');
-      const [scrapingEnabled, setScrapingEnabled] = useState(false);
+      const [scrapingEnabled, setScrapingEnabled] = useState(() => {
+        try { return localStorage.getItem('porra_scraping_enabled') !== '0'; } catch { return true; }
+      });
       const [scrapeStatus, setScrapeStatus] = useState({
         level: 'off',
         text: 'Actualización inactiva',
@@ -388,6 +393,10 @@
       useEffect(() => {
         localStorage.setItem(ADMIN_SESSION_KEY, adminLogged ? '1' : '0');
       }, [adminLogged]);
+
+      useEffect(() => {
+        localStorage.setItem('porra_scraping_enabled', scrapingEnabled ? '1' : '0');
+      }, [scrapingEnabled]);
 
       const requestAdminAccess = () => {
         if (adminLogged) {
@@ -526,8 +535,20 @@
         setState((prev) => {
           const matches = [...prev.matches];
           const m = { ...matches[index] };
-          matches[index] = { ...m, homeTeam: m.awayTeam, awayTeam: m.homeTeam };
-          return { ...prev, matches };
+          matches[index] = {
+            ...m,
+            homeTeam: m.awayTeam,
+            awayTeam: m.homeTeam,
+            result: { home: m.result.away, away: m.result.home },
+          };
+          // Intercambiar predicciones de todos los participantes para este partido
+          const participants = prev.participants.map((p) => {
+            const preds = [...p.predictions];
+            const pr = preds[index];
+            if (pr) preds[index] = { home: pr.away, away: pr.home };
+            return { ...p, predictions: preds };
+          });
+          return { ...prev, matches, participants };
         });
       };
 
@@ -568,6 +589,15 @@
           return;
         }
         const parsed = entryPreds.map((pr) => ({ home: toIntOrNull(pr.home), away: toIntOrNull(pr.away) }));
+
+        // Resumen legible para confirmar
+        const summaryLines = state.matches.map((m, i) => {
+          const h = parsed[i]?.home ?? '-';
+          const a = parsed[i]?.away ?? '-';
+          return `  P${i + 1}: ${m.homeTeam || 'Local'} ${h} - ${a} ${m.awayTeam || 'Visitante'}`;
+        }).join('\n');
+        if (!confirm(`¿Guardar estos pronósticos para ${cleanName}?\n\n${summaryLines}`)) return;
+
         let outcome = '';
         let savedParticipant = null;
         setState((prev) => {
@@ -671,8 +701,8 @@
         if (!kickoff) return false;
         const now = new Date();
         const ko = new Date(kickoff);
-        const start = new Date(ko.getTime() - 5 * 60 * 1000); // 5 min antes del kickoff
-        const end = new Date(ko.getTime() + 135 * 60 * 1000); // 2h15min después (partido + 15 min extra)
+        const start = new Date(ko.getTime() - 30 * 60 * 1000); // 30 min antes del kickoff
+        const end = new Date(ko.getTime() + 180 * 60 * 1000); // 3h después (partido + margen amplio)
         return now >= start && now <= end;
       };
 
@@ -685,8 +715,8 @@
         if (!match.kickoff) return { level: 'waiting', text: 'Esperando (sin hora)' };
         const now = new Date();
         const ko = new Date(match.kickoff);
-        const start = new Date(ko.getTime() - 5 * 60 * 1000);
-        const end = new Date(ko.getTime() + 135 * 60 * 1000);
+        const start = new Date(ko.getTime() - 30 * 60 * 1000);
+        const end = new Date(ko.getTime() + 180 * 60 * 1000);
         if (now < start) return { level: 'waiting', text: 'Esperando partido' };
         if (now >= start && now <= end) return { level: 'active', text: 'Partido activo' };
         if (isResultSet(match.result)) return { level: 'ended', text: 'Partido terminado ✓' };
@@ -750,8 +780,25 @@
       };
 
       // Notificaciones de fases de partido (inicio, descanso, reanudación, final)
-      const matchPhaseRef = useRef({});
+      const matchPhaseRef = useRef(null);
       const checkMatchPhasesWeb = () => {
+        // Inicializar fases en el primer tick para no notificar al cargar la página
+        if (matchPhaseRef.current === null) {
+          matchPhaseRef.current = {};
+          state.matches.forEach((match) => {
+            if (!match.kickoff) return;
+            const ko = new Date(match.kickoff);
+            const elapsed = (now.getTime() - ko.getTime()) / 60000;
+            let phase = 'pre';
+            if (elapsed >= 0 && elapsed < 47) phase = 'first_half';
+            else if (elapsed >= 47 && elapsed < 63) phase = 'halftime';
+            else if (elapsed >= 63 && elapsed < 112) phase = 'second_half';
+            else if (elapsed >= 112) phase = 'fulltime';
+            matchPhaseRef.current[match.id] = phase;
+          });
+          return; // No notificar en el primer tick
+        }
+
         state.matches.forEach((match, idx) => {
           if (!match.kickoff || !match.homeTeam || !match.awayTeam) return;
           const ko = new Date(match.kickoff);
@@ -765,7 +812,6 @@
           const prev = matchPhaseRef.current[match.id];
           if (prev === phase || phase === 'pre') return;
           matchPhaseRef.current[match.id] = phase;
-          if (prev === undefined) return; // Primera vez, no notificar
 
           const label = `${match.homeTeam} vs ${match.awayTeam}`;
           const score = isResultSet(match.result) ? ` (${match.result.home}-${match.result.away})` : '';
@@ -801,6 +847,14 @@
       useEffect(() => {
         checkMatchPhasesWeb();
       }, [now]);
+
+      // Pedir permiso de notificaciones al cargar si hay partidos programados
+      useEffect(() => {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+          const hasKickoff = state.matches.some((m) => m.kickoff);
+          if (hasKickoff) requestNotifPermission();
+        }
+      }, []);
 
       const getTeamLogo = (teamName) => {
         const known = KNOWN_TEAM_LOGOS[normalizeTeamName(teamName)];
@@ -928,14 +982,19 @@
         setScrapeStatus({ level: 'active', text: `Actualización activa (${ok} partidos actualizados)` });
       };
 
+      const scrapingInFlight = useRef(false);
       useEffect(() => {
         if (!scrapingEnabled) {
           setScrapeStatus({ level: 'off', text: 'Actualización inactiva' });
           return;
         }
         setScrapeStatus({ level: 'waiting', text: 'En espera: activado, pendiente de ventana de partido' });
+        // Ejecutar inmediatamente al activar
+        runScrape(true);
         const id = setInterval(() => {
-          runScrape(true);
+          if (scrapingInFlight.current) return; // evitar peticiones concurrentes
+          scrapingInFlight.current = true;
+          runScrape(true).finally(() => { scrapingInFlight.current = false; });
         }, SCRAPE_MS);
         return () => clearInterval(id);
       }, [scrapingEnabled, state.matches.map((m) => `${m.homeTeam}|${m.awayTeam}|${m.kickoff}`).join('||')]);
@@ -1021,6 +1080,30 @@
         } catch {
           pushLog('Error al importar archivo');
         }
+      };
+
+      const exportToExcel = () => {
+        const rows = state.participants.map((p) => {
+          const ev = evaluateParticipant(p, state.matches);
+          const row = { nombre: p.name };
+          state.matches.forEach((m, i) => {
+            const pr = p.predictions?.[i];
+            row[`p${i + 1}_local`] = pr?.home ?? '';
+            row[`p${i + 1}_visitante`] = pr?.away ?? '';
+            row[`p${i + 1}_resultado`] = (pr?.home != null && pr?.away != null) ? `${pr.home}-${pr.away}` : '';
+          });
+          row['estado'] = ev.status === 'alive' ? 'VIVO' : `ELIMINADO P${ev.eliminatedAt}`;
+          state.matches.forEach((m, i) => {
+            const mr = m.result;
+            row[`resultado_real_p${i + 1}`] = (mr?.home != null && mr?.away != null) ? `${mr.home}-${mr.away}` : '';
+          });
+          return row;
+        });
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Participantes');
+        XLSX.writeFile(wb, `porra_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        pushLog('Exportación Excel generada');
       };
 
       const resetRound = () => {
@@ -1324,6 +1407,7 @@
                     onChange={(e) => importParticipants(e.target.files?.[0])}
                   />
                 </label>
+                <button onClick={exportToExcel} className="tap-btn bg-emerald-700 hover:bg-emerald-600 rounded px-3 py-2 text-sm">Exportar a Excel</button>
                 <button onClick={resetRound} className="tap-btn bg-rose-700/70 hover:bg-rose-700 rounded px-3 py-2 text-sm">Resetear jornada</button>
               </div>
 
@@ -1457,8 +1541,8 @@
                   if (aFull && !bFull) return -1;
                   if (!aFull && bFull) return 1;
                 }
-                // Mismo grupo: alfabético
-                return a.name.localeCompare(b.name);
+                // Mismo grupo: ordenación natural (Diamante 2 antes que Diamante 11)
+                return a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' });
               }).map((p) => (
                 (() => {
                   const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));

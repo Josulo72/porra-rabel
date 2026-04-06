@@ -395,18 +395,23 @@ function scrapeScores_(homeTeam, awayTeam) {
 
       for (var le = 0; le < lastEvents.length; le++) {
         var lev = lastEvents[le];
-        if (teamsMatch_(lev.strAwayTeam, awayTeam) || teamsMatch_(lev.strHomeTeam, awayTeam)) {
-          if (lev.intHomeScore !== null && lev.intHomeScore !== undefined && lev.intHomeScore !== '') {
-            return {
-              found: true,
-              home: parseInt(lev.intHomeScore, 10),
-              away: parseInt(lev.intAwayScore, 10),
-              homeTeam: lev.strHomeTeam,
-              awayTeam: lev.strAwayTeam,
-              status: lev.strStatus || '',
-              event: lev.strEvent || ''
-            };
+        var normalMatch = teamsMatch_(lev.strHomeTeam, homeTeam) && teamsMatch_(lev.strAwayTeam, awayTeam);
+        var invertedMatch = teamsMatch_(lev.strHomeTeam, awayTeam) && teamsMatch_(lev.strAwayTeam, homeTeam);
+        if ((normalMatch || invertedMatch) && lev.intHomeScore !== null && lev.intHomeScore !== undefined && lev.intHomeScore !== '') {
+          var hScore2 = parseInt(lev.intHomeScore, 10);
+          var aScore2 = parseInt(lev.intAwayScore, 10);
+          if (invertedMatch && !normalMatch) {
+            var tmp2 = hScore2; hScore2 = aScore2; aScore2 = tmp2;
           }
+          return {
+            found: true,
+            home: hScore2,
+            away: aScore2,
+            homeTeam: lev.strHomeTeam,
+            awayTeam: lev.strAwayTeam,
+            status: lev.strStatus || '',
+            event: lev.strEvent || ''
+          };
         }
       }
     }
@@ -433,27 +438,31 @@ function doGet(e) {
     }
     var result = scrapeScores_(home, away);
 
-    // Detección de gol: comparar con marcador anterior y enviar WhatsApp
+    // Detección de gol: comparar con marcador anterior y enviar notificaciones
     if (result.found) {
       var prevScores = getPrevScores_();
       var matchKey = home.toLowerCase() + '_vs_' + away.toLowerCase();
       var prev = prevScores[matchKey];
+
+      // Actualizar el estado con el marcador actual ANTES de comprobar fases/goles
+      var state = getState_();
+      var matchIdx = -1;
+      for (var mi = 0; mi < state.matches.length; mi++) {
+        if (state.matches[mi].homeTeam.toLowerCase() === home.toLowerCase()) { matchIdx = mi; break; }
+      }
+      if (matchIdx >= 0) {
+        state.matches[matchIdx].result = { home: result.home, away: result.away };
+        state.matches[matchIdx].source = 'scraping';
+        state.matches[matchIdx].lastUpdated = new Date().toISOString();
+        setState_(state);
+      }
+
       if (prev && (prev.home !== result.home || prev.away !== result.away)) {
-        // ¡Gol detectado! Enviar WhatsApp
         var goalMsg = '⚽ *GOL en La Porra!*\n' + home + ' ' + result.home + ' - ' + result.away + ' ' + away;
 
-        // Contar supervivientes con la función correcta (considera partidos anteriores)
-        var state = getState_();
-        var matchIdx = -1;
-        for (var mi = 0; mi < state.matches.length; mi++) {
-          if (state.matches[mi].homeTeam.toLowerCase() === home.toLowerCase()) { matchIdx = mi; break; }
-        }
         if (matchIdx >= 0) {
-          // Actualizar resultado temporalmente para calcular
-          state.matches[matchIdx].result = { home: result.home, away: result.away };
           var counts = countAlive_(state, matchIdx);
           if (counts) {
-            var elimNow = counts.total - counts.alive;
             goalMsg += '\n🏆 Quedan *' + counts.alive + '/' + counts.total + '* supervivientes';
           }
         }
@@ -464,7 +473,7 @@ function doGet(e) {
       setPrevScores_(prevScores);
     }
 
-    // Comprobar fases del partido y notificar (inicio, descanso, reanudación, final)
+    // Comprobar fases del partido y notificar (con estado ya actualizado)
     checkMatchPhasesAndNotify_();
 
     return toJsonResponse({ ok: true, result: result });
