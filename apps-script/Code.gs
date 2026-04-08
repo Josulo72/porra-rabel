@@ -422,6 +422,127 @@ function scrapeScores_(homeTeam, awayTeam) {
   return { found: false };
 }
 
+/**
+ * ===================================================================
+ * SCRAPING AUTOMÁTICO DESDE EL SERVIDOR
+ * Se ejecuta solo cada minuto via trigger de Apps Script.
+ * No necesita que nadie tenga la web abierta.
+ * ===================================================================
+ */
+
+/**
+ * Comprueba si un partido está en ventana de scraping (30min antes a 3h después).
+ */
+function isLiveWindow_(kickoff) {
+  if (!kickoff) return false;
+  var now = new Date();
+  var ko = new Date(kickoff);
+  var start = new Date(ko.getTime() - 30 * 60 * 1000);
+  var end = new Date(ko.getTime() + 180 * 60 * 1000);
+  return now >= start && now <= end;
+}
+
+/**
+ * Función principal de scraping automático.
+ * Llamada cada minuto por el trigger de Apps Script.
+ * Recorre todos los partidos, scrapea los que estén en ventana,
+ * detecta goles, actualiza estado y envía notificaciones.
+ */
+function autoScrapeAll() {
+  var state = getState_();
+  if (!state || !state.matches || !state.matches.length) return;
+
+  var prevScores = getPrevScores_();
+  var stateChanged = false;
+
+  for (var i = 0; i < state.matches.length; i++) {
+    var match = state.matches[i];
+    if (!match.homeTeam || !match.awayTeam) continue;
+    if (!isLiveWindow_(match.kickoff)) continue;
+
+    // Scraping
+    var result = scrapeScores_(match.homeTeam, match.awayTeam);
+    if (!result.found) continue;
+
+    var matchKey = match.homeTeam.toLowerCase() + '_vs_' + match.awayTeam.toLowerCase();
+    var prev = prevScores[matchKey];
+
+    // Actualizar resultado en el estado
+    state.matches[i].result = { home: result.home, away: result.away };
+    state.matches[i].source = 'scraping';
+    state.matches[i].lastUpdated = new Date().toISOString();
+    stateChanged = true;
+
+    // Detección de gol
+    if (prev && (prev.home !== result.home || prev.away !== result.away)) {
+      var goalMsg = '⚽ *GOL en La Porra!*\n' + match.homeTeam + ' ' + result.home + ' - ' + result.away + ' ' + match.awayTeam;
+      var counts = countAlive_(state, i);
+      if (counts) {
+        goalMsg += '\n🏆 Quedan *' + counts.alive + '/' + counts.total + '* supervivientes';
+      }
+      notifyAll_(goalMsg);
+    }
+
+    prevScores[matchKey] = { home: result.home, away: result.away };
+  }
+
+  if (stateChanged) {
+    setState_(state);
+    setPrevScores_(prevScores);
+  }
+
+  // Comprobar fases (inicio, descanso, final) y notificar
+  checkMatchPhasesAndNotify_();
+}
+
+/**
+ * Activa el scraping automático: crea un trigger que ejecuta autoScrapeAll() cada minuto.
+ * Se puede llamar desde el frontend o ejecutar manualmente desde el editor de Apps Script.
+ */
+function setupAutoScrape() {
+  // Eliminar triggers anteriores para no duplicar
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  // Crear trigger cada 1 minuto
+  ScriptApp.newTrigger('autoScrapeAll')
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+  return { ok: true, message: 'Scraping automático activado (cada 1 minuto)' };
+}
+
+/**
+ * Desactiva el scraping automático: elimina el trigger.
+ */
+function removeAutoScrape() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') {
+      ScriptApp.deleteTrigger(triggers[i]);
+      removed++;
+    }
+  }
+  return { ok: true, message: 'Scraping automático desactivado (' + removed + ' triggers eliminados)' };
+}
+
+/**
+ * Comprueba si el trigger de scraping automático está activo.
+ */
+function isAutoScrapeActive() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') return true;
+  }
+  return false;
+}
+
+// ===================================================================
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || 'getState';
 
@@ -477,6 +598,11 @@ function doGet(e) {
     checkMatchPhasesAndNotify_();
 
     return toJsonResponse({ ok: true, result: result });
+  }
+
+  // Estado del scraping automático del servidor
+  if (action === 'getAutoScrapeStatus') {
+    return toJsonResponse({ ok: true, active: isAutoScrapeActive() });
   }
 
   // Configuración WhatsApp
@@ -615,6 +741,16 @@ function doPost(e) {
     if (action === 'testTelegram') {
       sendTelegram_('🏆 Test La Porra de Supervivencia: ¡Telegram configurado correctamente!');
       return toJsonResponse({ ok: true });
+    }
+
+    if (action === 'setupAutoScrape') {
+      var result = setupAutoScrape();
+      return toJsonResponse(result);
+    }
+
+    if (action === 'removeAutoScrape') {
+      var result = removeAutoScrape();
+      return toJsonResponse(result);
     }
 
     return toJsonResponse({ ok: false, error: 'Unknown action' });
