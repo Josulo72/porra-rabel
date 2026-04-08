@@ -496,54 +496,34 @@ function autoScrapeAll() {
 }
 
 /**
- * Activa el scraping automático: crea un trigger que ejecuta autoScrapeAll() cada minuto.
- * Se puede llamar desde el frontend o ejecutar manualmente desde el editor de Apps Script.
+ * Asegura que el trigger de scraping automático existe.
+ * Se llama automáticamente en cada doGet/doPost.
+ * Si el trigger ya existe, no hace nada. Si no existe, lo crea.
+ * El trigger corre cada minuto, pero autoScrapeAll() solo hace trabajo
+ * si hay partidos dentro de la ventana de juego (isLiveWindow_).
+ * Coste cero cuando no hay partidos.
  */
-function setupAutoScrape() {
-  // Eliminar triggers anteriores para no duplicar
-  var triggers = ScriptApp.getProjectTriggers();
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') {
-      ScriptApp.deleteTrigger(triggers[i]);
+function ensureAutoScrapeTriger_() {
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'autoScrapeAll') return; // ya existe
     }
+    // No existe, crearlo
+    ScriptApp.newTrigger('autoScrapeAll')
+      .timeBased()
+      .everyMinutes(1)
+      .create();
+  } catch (e) {
+    // Si falla (permisos), no bloquear
   }
-  // Crear trigger cada 1 minuto
-  ScriptApp.newTrigger('autoScrapeAll')
-    .timeBased()
-    .everyMinutes(1)
-    .create();
-  return { ok: true, message: 'Scraping automático activado (cada 1 minuto)' };
-}
-
-/**
- * Desactiva el scraping automático: elimina el trigger.
- */
-function removeAutoScrape() {
-  var triggers = ScriptApp.getProjectTriggers();
-  var removed = 0;
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') {
-      ScriptApp.deleteTrigger(triggers[i]);
-      removed++;
-    }
-  }
-  return { ok: true, message: 'Scraping automático desactivado (' + removed + ' triggers eliminados)' };
-}
-
-/**
- * Comprueba si el trigger de scraping automático está activo.
- */
-function isAutoScrapeActive() {
-  var triggers = ScriptApp.getProjectTriggers();
-  for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') return true;
-  }
-  return false;
 }
 
 // ===================================================================
 
 function doGet(e) {
+  // Auto-setup: asegurar que el trigger de scraping existe (se crea solo la primera vez)
+  ensureAutoScrapeTriger_();
   var action = (e && e.parameter && e.parameter.action) || 'getState';
 
   if (action === 'getState') {
@@ -598,11 +578,6 @@ function doGet(e) {
     checkMatchPhasesAndNotify_();
 
     return toJsonResponse({ ok: true, result: result });
-  }
-
-  // Estado del scraping automático del servidor
-  if (action === 'getAutoScrapeStatus') {
-    return toJsonResponse({ ok: true, active: isAutoScrapeActive() });
   }
 
   // Configuración WhatsApp
@@ -679,6 +654,7 @@ function updateParticipant_(participant) {
 }
 
 function doPost(e) {
+  ensureAutoScrapeTriger_();
   try {
     const params = (e && e.parameter) || {};
     let action = params.action || '';
@@ -741,16 +717,6 @@ function doPost(e) {
     if (action === 'testTelegram') {
       sendTelegram_('🏆 Test La Porra de Supervivencia: ¡Telegram configurado correctamente!');
       return toJsonResponse({ ok: true });
-    }
-
-    if (action === 'setupAutoScrape') {
-      var result = setupAutoScrape();
-      return toJsonResponse(result);
-    }
-
-    if (action === 'removeAutoScrape') {
-      var result = removeAutoScrape();
-      return toJsonResponse(result);
     }
 
     return toJsonResponse({ ok: false, error: 'Unknown action' });

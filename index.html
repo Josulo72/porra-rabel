@@ -278,8 +278,6 @@
       const [waMsg, setWaMsg] = useState('');
       const [tgConfig, setTgConfig] = useState({ enabled: false, botToken: '', chatId: '' });
       const [tgMsg, setTgMsg] = useState('');
-      const [serverScrapeActive, setServerScrapeActive] = useState(null); // null=cargando, true/false
-      const [serverScrapeMsg, setServerScrapeMsg] = useState('');
       const [scrapingEnabled, setScrapingEnabled] = useState(() => {
         try { return localStorage.getItem('porra_scraping_enabled') !== '0'; } catch { return true; }
       });
@@ -509,32 +507,7 @@
         } catch { setTgMsg('Error al enviar test'); }
       };
 
-      // Server-side auto-scraping
-      const loadServerScrapeStatus = async () => {
-        if (!sharedApiConfigured()) return;
-        try {
-          const res = await fetch(`${API_BASE}?action=getAutoScrapeStatus`);
-          const data = await res.json();
-          if (data?.ok) setServerScrapeActive(data.active);
-        } catch {}
-      };
-      const toggleServerScrape = async () => {
-        if (!sharedApiConfigured()) return;
-        const action = serverScrapeActive ? 'removeAutoScrape' : 'setupAutoScrape';
-        try {
-          setServerScrapeMsg('Procesando...');
-          const res = await fetch(API_BASE, { method: 'POST', body: JSON.stringify({ action }) });
-          const data = await res.json();
-          if (data?.ok) {
-            setServerScrapeActive(!serverScrapeActive);
-            setServerScrapeMsg(data.message || (serverScrapeActive ? 'Desactivado' : 'Activado'));
-          } else {
-            setServerScrapeMsg('Error: ' + (data?.error || 'desconocido'));
-          }
-        } catch { setServerScrapeMsg('Error de conexión'); }
-      };
-
-      useEffect(() => { if (adminLogged) { loadWaConfig(); loadTgConfig(); loadServerScrapeStatus(); } }, [adminLogged]);
+      useEffect(() => { if (adminLogged) { loadWaConfig(); loadTgConfig(); } }, [adminLogged]);
 
       const setMatchField = (index, field, value) => {
         setState((prev) => {
@@ -1380,41 +1353,11 @@
                   Salir admin
                 </button>
               </div>
-              {/* Scraping automático del SERVIDOR — lo importante */}
-              <div className="rounded-lg bg-emerald-950/40 border border-emerald-700/50 p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold text-emerald-300">Scraping automático (servidor)</p>
-                    <p className="text-[11px] text-slate-400 mt-1">El servidor de Google busca resultados cada minuto automáticamente. No necesitas tener la web abierta.</p>
-                  </div>
-                  <button
-                    onClick={toggleServerScrape}
-                    disabled={serverScrapeActive === null || !sharedApiConfigured()}
-                    className={`tap-btn rounded px-4 py-2 text-sm font-bold ${serverScrapeActive ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-rose-700 hover:bg-rose-600'} disabled:opacity-50`}
-                  >
-                    {serverScrapeActive === null ? 'Cargando...' : serverScrapeActive ? '✓ ACTIVO — Desactivar' : '✗ INACTIVO — Activar'}
-                  </button>
-                </div>
-                {serverScrapeMsg && <p className="text-xs text-emerald-300">{serverScrapeMsg}</p>}
-                {!sharedApiConfigured() && <p className="text-xs text-rose-400">Requiere backend de Google Apps Script configurado.</p>}
+              {/* Info scraping automático */}
+              <div className="rounded-lg bg-emerald-950/40 border border-emerald-700/50 p-3">
+                <p className="text-sm font-semibold text-emerald-300">Resultados automáticos</p>
+                <p className="text-[11px] text-slate-400 mt-1">El servidor busca resultados cada minuto automáticamente. Se activa solo 30 min antes del partido y se para 3h después. No necesitas hacer nada.</p>
               </div>
-
-              {/* Scraping del navegador — fallback */}
-              <details className="rounded-lg bg-slate-950/40 border border-slate-700 p-3">
-                <summary className="text-xs text-slate-400 cursor-pointer">Opciones avanzadas (scraping desde navegador / entrada manual)</summary>
-                <div className="flex flex-wrap gap-3 items-center mt-3">
-                  <button
-                    onClick={() => setScrapingEnabled((v) => !v)}
-                    className={`tap-btn rounded px-3 py-2 text-sm ${scrapingEnabled ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-slate-700 hover:bg-slate-600'}`}
-                  >
-                    Scraping navegador: {scrapingEnabled ? 'ACTIVO' : 'INACTIVO'}
-                  </button>
-                  <button onClick={() => runScrape(false)} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-2 text-sm">
-                    Actualizar ahora (manual)
-                  </button>
-                  <p className="text-xs text-slate-400">Fallback: solo funciona con la web abierta.</p>
-                </div>
-              </details>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {state.matches.map((m, idx) => (
