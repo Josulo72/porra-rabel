@@ -452,6 +452,29 @@ function autoScrapeAll() {
   var state = getState_();
   if (!state || !state.matches || !state.matches.length) return;
 
+  // Comprobar si hay algún partido pendiente o en juego
+  var now = new Date();
+  var anyAlive = false;
+  var anyInWindow = false;
+
+  for (var i = 0; i < state.matches.length; i++) {
+    if (!state.matches[i].kickoff) continue;
+    var ko = new Date(state.matches[i].kickoff);
+    var end = new Date(ko.getTime() + 180 * 60 * 1000);
+    if (now < end) anyAlive = true;
+    if (isLiveWindow_(state.matches[i].kickoff)) anyInWindow = true;
+  }
+
+  // Si todos los partidos terminaron, borrar el trigger y salir
+  if (!anyAlive) {
+    deleteTrigger_();
+    return;
+  }
+
+  // Si ningún partido está en ventana ahora, salir sin hacer nada (pero mantener trigger)
+  if (!anyInWindow) return;
+
+  // Scraping de partidos en ventana
   var prevScores = getPrevScores_();
   var stateChanged = false;
 
@@ -460,14 +483,13 @@ function autoScrapeAll() {
     if (!match.homeTeam || !match.awayTeam) continue;
     if (!isLiveWindow_(match.kickoff)) continue;
 
-    // Scraping
     var result = scrapeScores_(match.homeTeam, match.awayTeam);
     if (!result.found) continue;
 
     var matchKey = match.homeTeam.toLowerCase() + '_vs_' + match.awayTeam.toLowerCase();
     var prev = prevScores[matchKey];
 
-    // Actualizar resultado en el estado
+    // Actualizar resultado
     state.matches[i].result = { home: result.home, away: result.away };
     state.matches[i].source = 'scraping';
     state.matches[i].lastUpdated = new Date().toISOString();
@@ -496,26 +518,67 @@ function autoScrapeAll() {
 }
 
 /**
- * Asegura que el trigger de scraping automático existe.
- * Se llama automáticamente en cada doGet/doPost.
- * Si el trigger ya existe, no hace nada. Si no existe, lo crea.
- * El trigger corre cada minuto, pero autoScrapeAll() solo hace trabajo
- * si hay partidos dentro de la ventana de juego (isLiveWindow_).
- * Coste cero cuando no hay partidos.
+ * Gestión inteligente del trigger de scraping.
+ * - Se CREA automáticamente cuando hay partidos con kickoff programado que aún no han terminado.
+ * - Se BORRA automáticamente cuando todos los partidos han terminado (pasada la ventana de 3h).
+ * - Si no hay kickoffs configurados, no se crea trigger.
  */
-function ensureAutoScrapeTriger_() {
+function hasTrigger_() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') return true;
+  }
+  return false;
+}
+
+function createTrigger_() {
+  if (hasTrigger_()) return;
   try {
-    var triggers = ScriptApp.getProjectTriggers();
-    for (var i = 0; i < triggers.length; i++) {
-      if (triggers[i].getHandlerFunction() === 'autoScrapeAll') return; // ya existe
-    }
-    // No existe, crearlo
     ScriptApp.newTrigger('autoScrapeAll')
       .timeBased()
       .everyMinutes(1)
       .create();
-  } catch (e) {
-    // Si falla (permisos), no bloquear
+  } catch (e) {}
+}
+
+function deleteTrigger_() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'autoScrapeAll') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+}
+
+/**
+ * Analiza los partidos y decide si el trigger debe existir o no.
+ * - Algún partido empieza en menos de 30 min o está en juego → activar
+ * - Todos los partidos terminaron (pasaron 3h desde kickoff) → desactivar
+ * - No hay kickoffs → no hacer nada
+ */
+function syncTriggerWithMatches_() {
+  var state = getState_();
+  if (!state.matches || !state.matches.length) return;
+
+  var now = new Date();
+  var hasUpcomingOrLive = false;
+
+  for (var i = 0; i < state.matches.length; i++) {
+    var match = state.matches[i];
+    if (!match.kickoff) continue;
+    var ko = new Date(match.kickoff);
+    var end = new Date(ko.getTime() + 180 * 60 * 1000); // 3h después
+    if (now < end) {
+      // Este partido aún no ha terminado (o ni ha empezado)
+      hasUpcomingOrLive = true;
+      break;
+    }
+  }
+
+  if (hasUpcomingOrLive) {
+    createTrigger_();
+  } else {
+    deleteTrigger_();
   }
 }
 
@@ -523,7 +586,7 @@ function ensureAutoScrapeTriger_() {
 
 function doGet(e) {
   // Auto-setup: asegurar que el trigger de scraping existe (se crea solo la primera vez)
-  ensureAutoScrapeTriger_();
+  syncTriggerWithMatches_();
   var action = (e && e.parameter && e.parameter.action) || 'getState';
 
   if (action === 'getState') {
@@ -654,7 +717,7 @@ function updateParticipant_(participant) {
 }
 
 function doPost(e) {
-  ensureAutoScrapeTriger_();
+  syncTriggerWithMatches_();
   try {
     const params = (e && e.parameter) || {};
     let action = params.action || '';
