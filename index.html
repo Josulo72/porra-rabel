@@ -700,7 +700,7 @@
         const now = new Date();
         const ko = new Date(kickoff);
         const start = new Date(ko.getTime() - 30 * 60 * 1000); // 30 min antes del kickoff
-        const end = new Date(ko.getTime() + 180 * 60 * 1000); // 3h después (partido + margen amplio)
+        const end = new Date(ko.getTime() + 250 * 60 * 1000); // 4h10min después (cubre prórrogas y penaltis)
         return now >= start && now <= end;
       };
 
@@ -714,7 +714,7 @@
         const now = new Date();
         const ko = new Date(match.kickoff);
         const start = new Date(ko.getTime() - 30 * 60 * 1000);
-        const end = new Date(ko.getTime() + 180 * 60 * 1000);
+        const end = new Date(ko.getTime() + 250 * 60 * 1000);
         if (now < start) return { level: 'waiting', text: 'Esperando partido' };
         if (now >= start && now <= end) return { level: 'active', text: 'Partido activo' };
         if (isResultSet(match.result)) return { level: 'ended', text: 'Partido terminado ✓' };
@@ -980,7 +980,7 @@
         // Auto-desactivar si todos los partidos con kickoff ya pasaron su ventana
         const allMatchesWithKickoff = state.matches.filter((m) => m.kickoff);
         if (allMatchesWithKickoff.length > 0 && allMatchesWithKickoff.every((m) => !isLiveWindow(m.kickoff))) {
-          const allEnded = allMatchesWithKickoff.every((m) => new Date() > new Date(new Date(m.kickoff).getTime() + 180 * 60 * 1000));
+          const allEnded = allMatchesWithKickoff.every((m) => new Date() > new Date(new Date(m.kickoff).getTime() + 250 * 60 * 1000));
           if (allEnded) {
             setScrapingEnabled(false);
             setScrapeStatus({ level: 'off', text: 'Scraping detenido: todos los partidos han terminado' });

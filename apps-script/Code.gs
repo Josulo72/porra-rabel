@@ -438,7 +438,7 @@ function isLiveWindow_(kickoff) {
   var now = new Date();
   var ko = new Date(kickoff);
   var start = new Date(ko.getTime() - 30 * 60 * 1000);
-  var end = new Date(ko.getTime() + 180 * 60 * 1000);
+  var end = new Date(ko.getTime() + 250 * 60 * 1000);
   return now >= start && now <= end;
 }
 
@@ -460,7 +460,7 @@ function autoScrapeAll() {
   for (var i = 0; i < state.matches.length; i++) {
     if (!state.matches[i].kickoff) continue;
     var ko = new Date(state.matches[i].kickoff);
-    var end = new Date(ko.getTime() + 180 * 60 * 1000);
+    var end = new Date(ko.getTime() + 250 * 60 * 1000);
     if (now < end) anyAlive = true;
     if (isLiveWindow_(state.matches[i].kickoff)) anyInWindow = true;
   }
@@ -567,7 +567,7 @@ function syncTriggerWithMatches_() {
     var match = state.matches[i];
     if (!match.kickoff) continue;
     var ko = new Date(match.kickoff);
-    var end = new Date(ko.getTime() + 180 * 60 * 1000); // 3h después
+    var end = new Date(ko.getTime() + 250 * 60 * 1000); // 3h después
     if (now < end) {
       // Este partido aún no ha terminado (o ni ha empezado)
       hasUpcomingOrLive = true;
