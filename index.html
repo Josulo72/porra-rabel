@@ -92,7 +92,7 @@
     const ADMIN_KEY = 'porra_admin_visible';
     const ADMIN_SESSION_KEY = 'porra_admin_session_v1';
     const SCRAPE_MS = 45000;
-    const REMOTE_SYNC_MS = 900;
+    const REMOTE_SYNC_MS = 3000;
     const REMOTE_POLL_MS = 30000; // Polling para ver cambios de otros usuarios
 
     const DEFAULT_MATCHES = [
@@ -102,10 +102,9 @@
     ];
 
     const KNOWN_TEAM_LOGOS = {
+      'madrid': 'https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg',
       'real madrid': 'https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg',
-      'fc barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
       'barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
-      'sd ponferradina': 'https://upload.wikimedia.org/wikipedia/en/0/01/SD_Ponferradina_logo.png',
       'ponferradina': 'https://upload.wikimedia.org/wikipedia/en/0/01/SD_Ponferradina_logo.png',
     };
 
@@ -137,7 +136,7 @@
     const toIntOrNull = (v) => {
       if (v === '' || v === null || v === undefined) return null;
       const n = Number(v);
-      return Number.isFinite(n) ? n : null;
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
     };
 
     const normalizeTeamName = (name) => String(name || '').toLowerCase()
@@ -283,8 +282,8 @@
         try { return localStorage.getItem('porra_scraping_enabled') !== '0'; } catch { return true; }
       });
       const [scrapeStatus, setScrapeStatus] = useState({
-        level: 'off',
-        text: 'Actualización inactiva',
+        level: 'waiting',
+        text: 'Iniciando...',
       });
       const [entryOpen, setEntryOpen] = useState(false);
       const [entryParticipantId, setEntryParticipantId] = useState('');
@@ -981,7 +980,7 @@
         // Auto-desactivar si todos los partidos con kickoff ya pasaron su ventana
         const allMatchesWithKickoff = state.matches.filter((m) => m.kickoff);
         if (allMatchesWithKickoff.length > 0 && allMatchesWithKickoff.every((m) => !isLiveWindow(m.kickoff))) {
-          const allEnded = allMatchesWithKickoff.every((m) => new Date() > new Date(new Date(m.kickoff).getTime() + 135 * 60 * 1000));
+          const allEnded = allMatchesWithKickoff.every((m) => new Date() > new Date(new Date(m.kickoff).getTime() + 180 * 60 * 1000));
           if (allEnded) {
             setScrapingEnabled(false);
             setScrapeStatus({ level: 'off', text: 'Scraping detenido: todos los partidos han terminado' });
