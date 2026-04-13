@@ -230,6 +230,7 @@
             home: toIntOrNull(src.result?.home),
             away: toIntOrNull(src.result?.away),
           },
+          flashscoreUrl: String(src.flashscoreUrl || ''),
           source: src.source === 'scraping' ? 'scraping' : 'manual',
           lastUpdated: src.lastUpdated || null,
         };
@@ -922,8 +923,10 @@
           return { ok: false, reason: 'no-api' };
         }
         try {
-          // Llamamos al Apps Script como proxy para evitar CORS
-          const url = `${API_BASE}?action=scrapeScores&home=${encodeURIComponent(match.homeTeam)}&away=${encodeURIComponent(match.awayTeam)}`;
+          // Si tiene URL de Flashscore, usar esa vía; si no, TheSportsDB
+          const url = match.flashscoreUrl
+            ? `${API_BASE}?action=scrapeFlashscore&url=${encodeURIComponent(match.flashscoreUrl)}&appHome=${encodeURIComponent(match.homeTeam)}&appAway=${encodeURIComponent(match.awayTeam)}`
+            : `${API_BASE}?action=scrapeScores&home=${encodeURIComponent(match.homeTeam)}&away=${encodeURIComponent(match.awayTeam)}`;
           const res = await fetch(url, { method: 'GET' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
@@ -946,7 +949,7 @@
               };
               return { ...prevState, matches };
             });
-            pushLog(`✅ Scraping OK: ${match.homeTeam} ${home}-${away} ${match.awayTeam}`);
+            pushLog(`✅ ${match.flashscoreUrl ? 'Flashscore' : 'TheSportsDB'} OK: ${match.homeTeam} ${home}-${away} ${match.awayTeam}`);
             return { ok: true };
           } else {
             pushLog(`Partido ${idx + 1}: sin datos en API, usa resultado manual.`);
@@ -1386,6 +1389,13 @@
                       onChange={(e) => setMatchField(idx, 'kickoff', e.target.value)}
                       className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
                     />
+                    <input
+                      value={m.flashscoreUrl || ''}
+                      onChange={(e) => setMatchField(idx, 'flashscoreUrl', e.target.value)}
+                      placeholder="URL Flashscore (opcional, para auto-scraping)"
+                      className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm text-xs"
+                    />
+                    {m.flashscoreUrl && <p className="text-xs text-emerald-400">Flashscore configurado</p>}
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         type="number"

@@ -447,6 +447,7 @@ function isLiveWindow_(kickoff) {
  * Llamada cada minuto por el trigger de Apps Script.
  * Recorre todos los partidos, scrapea los que estén en ventana,
  * detecta goles, actualiza estado y envía notificaciones.
+ * Usa Flashscore si el partido tiene flashscoreUrl configurada, si no TheSportsDB.
  */
 function autoScrapeAll() {
   var state = getState_();
@@ -483,10 +484,18 @@ function autoScrapeAll() {
     if (!match.homeTeam || !match.awayTeam) continue;
     if (!isLiveWindow_(match.kickoff)) continue;
 
-    var result = scrapeScores_(match.homeTeam, match.awayTeam);
+    // Usar Flashscore si tiene URL configurada, si no TheSportsDB
+    var result;
+    if (match.flashscoreUrl) {
+      result = scrapeFlashscore_(match.flashscoreUrl, match.homeTeam, match.awayTeam);
+    } else {
+      result = scrapeScores_(match.homeTeam, match.awayTeam);
+    }
     if (!result.found) continue;
 
-    var matchKey = match.homeTeam.toLowerCase() + '_vs_' + match.awayTeam.toLowerCase();
+    var matchKey = match.flashscoreUrl
+      ? 'fs_' + (match.flashscoreUrl.split('mid=')[1] || match.flashscoreUrl.slice(-20))
+      : match.homeTeam.toLowerCase() + '_vs_' + match.awayTeam.toLowerCase();
     var prev = prevScores[matchKey];
 
     // Actualizar resultado
@@ -584,6 +593,67 @@ function syncTriggerWithMatches_() {
 
 // ===================================================================
 
+/**
+ * Scraping de Flashscore: extrae el marcador del HTML sin renderizar JavaScript.
+ * Los scores están en window.environment.common_feed: DE = goles local, DF = goles visitante.
+ * eventStageId: 1 = pre-partido, 2 = en juego, 3 = finalizado.
+ */
+function scrapeFlashscore_(fsUrl, appHome, appAway) {
+  try {
+    var response = UrlFetchApp.fetch(fsUrl, {
+      muteHttpExceptions: true,
+      followRedirects: true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'es-ES,es;q=0.9'
+      }
+    });
+    var html = response.getContentText();
+
+    var stageMatch = html.match(/"eventStageId"\s*:\s*(\d+)/);
+    var eventStageId = stageMatch ? parseInt(stageMatch[1], 10) : 0;
+
+    // DE = goles equipo local Flashscore, DF = goles visitante Flashscore
+    var deMatch = html.match(/"DE"\s*:\s*"(\d+)"/);
+    var dfMatch = html.match(/"DF"\s*:\s*"(\d+)"/);
+
+    if (!deMatch || !dfMatch) {
+      return { found: false, reason: eventStageId === 1 ? 'pre-match' : 'no-scores' };
+    }
+
+    var fsHome = parseInt(deMatch[1], 10);
+    var fsAway = parseInt(dfMatch[1], 10);
+
+    // Nombres de equipo en Flashscore
+    var homeNameMatch = html.match(/"home"\s*:\s*\[\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/);
+    var awayNameMatch = html.match(/"away"\s*:\s*\[\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/);
+    var fsHomeName = homeNameMatch ? homeNameMatch[1] : '';
+    var fsAwayName = awayNameMatch ? awayNameMatch[1] : '';
+
+    // Mapear: si el local de Flashscore coincide con el visitante de nuestra app, invertir
+    var swapped = false;
+    if (appHome && appAway && fsHomeName && fsAwayName) {
+      var homeMatchesHome = teamsMatch_(fsHomeName, appHome);
+      var homeMatchesAway = teamsMatch_(fsHomeName, appAway);
+      if (!homeMatchesHome && homeMatchesAway) {
+        swapped = true;
+      }
+    }
+
+    return {
+      found: true,
+      home: swapped ? fsAway : fsHome,
+      away: swapped ? fsHome : fsAway,
+      homeTeam: swapped ? fsAwayName : fsHomeName,
+      awayTeam: swapped ? fsHomeName : fsAwayName,
+      eventStageId: eventStageId,
+      status: eventStageId === 3 ? 'Finalizado' : (eventStageId === 1 ? 'No comenzado' : 'En juego')
+    };
+  } catch (e) {
+    return { found: false, error: String(e) };
+  }
+}
 function doGet(e) {
   // Auto-setup: asegurar que el trigger de scraping existe (se crea solo la primera vez)
   syncTriggerWithMatches_();
@@ -640,6 +710,45 @@ function doGet(e) {
     // Comprobar fases del partido y notificar (con estado ya actualizado)
     checkMatchPhasesAndNotify_();
 
+    return toJsonResponse({ ok: true, result: result });
+  }
+
+  // Scraping Flashscore: el frontend llama con action=scrapeFlashscore&url=...&appHome=...&appAway=...
+  if (action === 'scrapeFlashscore') {
+    var fsUrl = (e.parameter && e.parameter.url) || '';
+    var appHome = (e.parameter && e.parameter.appHome) || '';
+    var appAway = (e.parameter && e.parameter.appAway) || '';
+    if (!fsUrl) {
+      return toJsonResponse({ ok: false, error: 'Falta parámetro url' });
+    }
+    var result = scrapeFlashscore_(fsUrl, appHome, appAway);
+
+    // Detección de gol y notificaciones (misma lógica que scrapeScores)
+    if (result.found) {
+      var prevScores = getPrevScores_();
+      var matchKey = 'fs_' + fsUrl.split('mid=')[1] || fsUrl.slice(-20);
+      var prev = prevScores[matchKey];
+      if (prev && (prev.home !== result.home || prev.away !== result.away)) {
+        var goalMsg = '⚽ *GOL en La Porra!*\n' + (appHome || result.homeTeam) + ' ' + result.home + ' - ' + result.away + ' ' + (appAway || result.awayTeam);
+
+        var state = getState_();
+        for (var mi = 0; mi < state.matches.length; mi++) {
+          if (state.matches[mi].flashscoreUrl === fsUrl) {
+            state.matches[mi].result = { home: result.home, away: result.away };
+            var counts = countAlive_(state, mi);
+            if (counts) {
+              goalMsg += '\n🏆 Quedan *' + counts.alive + '/' + counts.total + '* supervivientes';
+            }
+            break;
+          }
+        }
+        notifyAll_(goalMsg);
+      }
+      prevScores[matchKey] = { home: result.home, away: result.away };
+      setPrevScores_(prevScores);
+    }
+
+    checkMatchPhasesAndNotify_();
     return toJsonResponse({ ok: true, result: result });
   }
 
