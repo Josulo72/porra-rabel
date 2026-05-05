@@ -271,6 +271,7 @@
       const [logoCache, setLogoCache] = useState({});
       const [flashMap, setFlashMap] = useState({});
       const [goalToast, setGoalToast] = useState(null);
+      const [saveToast, setSaveToast] = useState(null);
       const [now, setNow] = useState(new Date());
       const [notifPermission, setNotifPermission] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'denied');
       const [waConfig, setWaConfig] = useState({ enabled: false, recipients: [] });
@@ -581,6 +582,11 @@
         });
       };
 
+      const showSaveToast = (msg) => {
+        setSaveToast(msg);
+        setTimeout(() => setSaveToast(null), 2200);
+      };
+
       const saveParticipantPrediction = () => {
         const cleanName = entryName.trim();
         if (!cleanName) {
@@ -589,101 +595,79 @@
         }
         const parsed = entryPreds.map((pr) => ({ home: toIntOrNull(pr.home), away: toIntOrNull(pr.away) }));
 
-        // Resumen legible para confirmar
-        const summaryLines = state.matches.map((m, i) => {
-          const h = parsed[i]?.home ?? '-';
-          const a = parsed[i]?.away ?? '-';
-          return `  P${i + 1}: ${m.homeTeam || 'Local'} ${h} - ${a} ${m.awayTeam || 'Visitante'}`;
-        }).join('\n');
-        if (!confirm(`¿Guardar estos pronósticos para ${cleanName}?\n\n${summaryLines}`)) return;
+        // Calcular nuevo estado y resultado SIN depender del callback de setState
+        const matchLocks = state.matches.map((m) => isMatchLocked(m));
+        let idx = -1;
+        if (entryParticipantId) {
+          idx = state.participants.findIndex((p) => p.id === entryParticipantId);
+        }
+        if (idx < 0) {
+          idx = state.participants.findIndex((p) => p.name.trim().toLowerCase() === cleanName.toLowerCase());
+        }
 
-        let outcome = '';
+        let nextParticipants = null;
         let savedParticipant = null;
-        setState((prev) => {
-          const matchLocks = prev.matches.map((m) => isMatchLocked(m));
+        let outcome = '';
 
-          // Buscar participante existente (por id o por nombre)
-          let idx = -1;
-          if (entryParticipantId) {
-            idx = prev.participants.findIndex((p) => p.id === entryParticipantId);
+        if (idx >= 0) {
+          const existing = state.participants[idx];
+          const existingPreds = existing.predictions || [{ home: null, away: null }, { home: null, away: null }, { home: null, away: null }];
+          const existingLocks = existing.locked || [false, false, false];
+          const isBlocked = (i) => matchLocks[i] || existingLocks[i];
+
+          const nextPreds = parsed.map((pr, i) => isBlocked(i) ? existingPreds[i] || { home: null, away: null } : pr);
+          const nextLocks = existingLocks.map((lk, i) => {
+            if (lk) return true;
+            if (matchLocks[i]) return true;
+            return Number.isInteger(nextPreds[i].home) && Number.isInteger(nextPreds[i].away);
+          });
+
+          const unlockedValid = nextPreds.every((pr, i) => isBlocked(i) || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
+          if (!unlockedValid) {
+            setSubmitMsg('Completa con números válidos los partidos aún abiertos.');
+            return;
           }
-          if (idx < 0) {
-            idx = prev.participants.findIndex((p) => p.name.trim().toLowerCase() === cleanName.toLowerCase());
-          }
-
-          if (idx >= 0) {
-            // Participante existente: respetar locks de partido Y locks de predicción
-            const participants = [...prev.participants];
-            const existing = participants[idx];
-            const existingPreds = existing.predictions || [{ home: null, away: null }, { home: null, away: null }, { home: null, away: null }];
-            const existingLocks = existing.locked || [false, false, false];
-
-            // Un partido está bloqueado si: el partido ya empezó O el participante ya envió su predicción
-            const isBlocked = (i) => matchLocks[i] || existingLocks[i];
-
-            const nextPreds = parsed.map((pr, i) => isBlocked(i) ? existingPreds[i] || { home: null, away: null } : pr);
-            const nextLocks = existingLocks.map((lk, i) => {
-              if (lk) return true; // ya estaba locked
-              if (matchLocks[i]) return true; // partido empezado
-              // Marcar como locked si envía predicción válida
-              return Number.isInteger(nextPreds[i].home) && Number.isInteger(nextPreds[i].away);
-            });
-
-            // Verificar que los partidos abiertos (no bloqueados) tengan valores válidos
-            const unlockedValid = nextPreds.every((pr, i) => isBlocked(i) || (Number.isInteger(pr.home) && Number.isInteger(pr.away)));
-            if (!unlockedValid) {
-              outcome = 'Completa con números válidos los partidos aún abiertos.';
-              return prev;
-            }
-
-            // Verificar si hay algo que cambiar (si todo está bloqueado, no hay nada que hacer)
-            const allBlocked = [0, 1, 2].every((i) => isBlocked(i));
-            if (allBlocked) {
-              outcome = 'Todos tus pronósticos ya están bloqueados. No puedes modificarlos.';
-              return prev;
-            }
-
-            participants[idx] = { ...existing, predictions: nextPreds, locked: nextLocks };
-            savedParticipant = participants[idx];
-            outcome = `Pronóstico guardado para ${existing.name}.`;
-            return { ...prev, participants };
+          const allBlocked = [0, 1, 2].every((i) => isBlocked(i));
+          if (allBlocked) {
+            setSubmitMsg('Todos tus pronósticos ya están bloqueados. No puedes modificarlos.');
+            return;
           }
 
-          // Nuevo participante
+          const updated = { ...existing, predictions: nextPreds, locked: nextLocks };
+          nextParticipants = [...state.participants];
+          nextParticipants[idx] = updated;
+          savedParticipant = updated;
+          outcome = `Pronóstico guardado para ${existing.name}.`;
+        } else {
           if (matchLocks.some(Boolean)) {
-            outcome = 'No se pueden crear nuevos participantes después del inicio de partidos.';
-            return prev;
+            setSubmitMsg('No se pueden crear nuevos participantes después del inicio de partidos.');
+            return;
           }
           const newValid = parsed.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
           if (!newValid) {
-            outcome = 'Completa los 3 marcadores con números válidos.';
-            return prev;
+            setSubmitMsg('Completa los 3 marcadores con números válidos.');
+            return;
           }
-          if (prev.participants.length >= 26) {
-            outcome = 'No hay plazas libres. Usa exactamente un nombre ya registrado.';
-            return prev;
+          if (state.participants.length >= 26) {
+            setSubmitMsg('No hay plazas libres. Usa exactamente un nombre ya registrado.');
+            return;
           }
-          const newParticipant = {
+          savedParticipant = {
             id: crypto.randomUUID(),
             name: cleanName,
             predictions: parsed,
             locked: [true, true, true],
           };
-          savedParticipant = newParticipant;
+          nextParticipants = [...state.participants, savedParticipant];
           outcome = `Pronóstico guardado para ${cleanName}.`;
-          return {
-            ...prev,
-            participants: [...prev.participants, newParticipant],
-          };
-        });
-        setSubmitMsg(outcome);
-        if (outcome.startsWith('Pronóstico guardado')) {
-          setEntryOpen(false);
-          // Envío atómico al backend (no espera, no bloquea UI)
-          if (savedParticipant) saveParticipantRemote(savedParticipant);
-          // Volver al principio de la página tras guardar
-          try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
         }
+
+        setState((prev) => ({ ...prev, participants: nextParticipants }));
+        setSubmitMsg('');
+        setEntryOpen(false);
+        if (savedParticipant) saveParticipantRemote(savedParticipant);
+        showSaveToast(outcome);
+        scrollToTop();
       };
 
       const pushLog = (text) => {
@@ -1129,8 +1113,13 @@
         pushLog('Exportación Excel generada');
       };
 
+      const scrollToTop = () => {
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+      };
+
       const resetRound = () => {
         if (!confirm('Se borrarán resultados de partidos Y pronósticos de todos los participantes. ¿Continuar?')) return;
+        scrollToTop();
         setState((prev) => ({
           ...prev,
           matches: prev.matches.map((m) => ({ ...m, result: { home: null, away: null }, source: 'manual', lastUpdated: null })),
@@ -1152,6 +1141,7 @@
         const participant = state.participants.find((p) => p.id === participantId);
         if (!participant) return;
         if (!confirm(`Se borrarán los 3 pronósticos de ${participant.name}. ¿Continuar?`)) return;
+        scrollToTop();
         setState((prev) => ({
           ...prev,
           participants: prev.participants.map((p) =>
@@ -1643,6 +1633,15 @@
               <div className="bg-gradient-to-r from-lime-600 to-emerald-600 text-white px-6 py-4 rounded-2xl shadow-2xl border-2 border-lime-300/50 text-center min-w-[280px]">
                 <p className="text-2xl font-extrabold">{goalToast.msg}</p>
                 <p className="text-sm mt-1 opacity-90">{goalToast.full}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Toast de guardado */}
+          {saveToast && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70]">
+              <div className="bg-gradient-to-r from-cyan-700 to-emerald-700 text-white px-5 py-3 rounded-xl shadow-2xl border border-cyan-300/40 text-center min-w-[260px]">
+                <p className="text-sm font-semibold">✓ {saveToast}</p>
               </div>
             </div>
           )}
