@@ -681,6 +681,8 @@
           setEntryOpen(false);
           // Envío atómico al backend (no espera, no bloquea UI)
           if (savedParticipant) saveParticipantRemote(savedParticipant);
+          // Volver al principio de la página tras guardar
+          try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
         }
       };
 
