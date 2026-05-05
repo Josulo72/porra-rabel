@@ -681,8 +681,7 @@
           setEntryOpen(false);
           // Envío atómico al backend (no espera, no bloquea UI)
           if (savedParticipant) saveParticipantRemote(savedParticipant);
-          // Volver al principio de la página tras guardar
-          try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+          scrollToTop();
         }
       };
 
@@ -1129,8 +1128,13 @@
         pushLog('Exportación Excel generada');
       };
 
+      const scrollToTop = () => {
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+      };
+
       const resetRound = () => {
         if (!confirm('Se borrarán resultados de partidos Y pronósticos de todos los participantes. ¿Continuar?')) return;
+        scrollToTop();
         setState((prev) => ({
           ...prev,
           matches: prev.matches.map((m) => ({ ...m, result: { home: null, away: null }, source: 'manual', lastUpdated: null })),
@@ -1152,6 +1156,7 @@
         const participant = state.participants.find((p) => p.id === participantId);
         if (!participant) return;
         if (!confirm(`Se borrarán los 3 pronósticos de ${participant.name}. ¿Continuar?`)) return;
+        scrollToTop();
         setState((prev) => ({
           ...prev,
           participants: prev.participants.map((p) =>
