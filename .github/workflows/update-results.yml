@@ -1,0 +1,186 @@
+name: Auto Update Match Results
+
+on:
+  schedule:
+    # Run every 15 minutes during typical match hours (UTC: 14:00-23:00 = Spain 16:00-01:00)
+    - cron: '0,15,30,45 14-22 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force update even outside match window'
+        required: false
+        default: 'false'
+
+jobs:
+  update-results:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and update match results
+        run: |
+          node - <<'SCRIPT'
+          const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwIo68AUaC7Sd9eXKWGUWcCP6Be24j-9TmkHNEVKSmfOVIT5fQen3Kq5mqWlwLSyXq86w/exec';
+          
+          async function main() {
+            // 1. Get current state from Apps Script
+            const stateRes = await fetch(APPS_SCRIPT_URL + '?action=getState');
+            const stateData = await stateRes.json();
+            
+            if (!stateData.ok || !stateData.state) {
+              console.log('Could not fetch current state:', JSON.stringify(stateData));
+              process.exit(0);
+            }
+            
+            const state = stateData.state;
+            const matches = state.matches || [];
+            console.log('Current matches:', matches.length);
+            
+            let updated = false;
+            const now = new Date();
+            
+            // 2. For each match, try to find the result
+            for (const match of matches) {
+              // Skip if result already set
+              if (match.result?.home !== null && match.result?.away !== null) {
+                console.log('Match ' + match.id + ' already has result: ' + match.result.home + '-' + match.result.away);
+                continue;
+              }
+              
+              if (!match.kickoff) {
+                console.log('Match ' + match.id + ' has no kickoff time, skipping');
+                continue;
+              }
+              
+              const kickoff = new Date(match.kickoff);
+              const minutesSinceKickoff = (now - kickoff) / 60000;
+              
+              // Only check if match has started (kickoff + 5min) and not too old (8 hours)
+              if (minutesSinceKickoff < 5) {
+                console.log('Match ' + match.id + ' (' + match.homeTeam + ' vs ' + match.awayTeam + ') not started yet (' + Math.round(minutesSinceKickoff) + 'min)');
+                continue;
+              }
+              if (minutesSinceKickoff > 480) {
+                console.log('Match ' + match.id + ' too old (' + Math.round(minutesSinceKickoff) + 'min ago), skipping');
+                continue;
+              }
+              
+              console.log('Checking result for: ' + match.homeTeam + ' vs ' + match.awayTeam + ' (kickoff ' + Math.round(minutesSinceKickoff) + 'min ago)');
+              
+              // 3. Try ESPN API
+              const result = await getResultFromESPN(match);
+              
+              if (result) {
+                console.log('ESPN result found: ' + match.homeTeam + ' ' + result.home + '-' + result.away + ' ' + match.awayTeam + ' [' + result.status + ']');
+                
+                // Only update if match is finished (or has goals - live)
+                const isFinished = result.status && (result.status.toLowerCase().includes('final') || result.status.toLowerCase().includes('full') || result.status.toLowerCase().includes('ft') || result.status.toLowerCase().includes('terminado') || result.status.toLowerCase().includes('ended'));
+                
+                if (isFinished || (minutesSinceKickoff > 100 && result.home !== null)) {
+                  match.result = { home: result.home, away: result.away };
+                  match.source = 'espn';
+                  match.lastUpdated = new Date().toISOString();
+                  updated = true;
+                  console.log('Updated match ' + match.id + ': ' + result.home + '-' + result.away);
+                } else {
+                  console.log('Match not finished yet (status: ' + result.status + '), keeping null result');
+                }
+              } else {
+                console.log('No ESPN result found for: ' + match.homeTeam + ' vs ' + match.awayTeam);
+              }
+            }
+            
+            // 4. Save updated state back to Apps Script
+            if (updated) {
+              console.log('Saving updated state...');
+              const saveRes = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'setState', state: state })
+              });
+              const saveData = await saveRes.json().catch(() => ({}));
+              console.log('Save result:', JSON.stringify(saveData));
+            } else {
+              console.log('No updates needed');
+            }
+          }
+          
+          async function getResultFromESPN(match) {
+            // Normalize team names for matching
+            const normalize = (s) => s.toLowerCase()
+              .replace(/fc |cf |sd |cd |ud |ad |real |atlético |atletico |deportivo /g, '')
+              .trim();
+            
+            const homeNorm = normalize(match.homeTeam);
+            const awayNorm = normalize(match.awayTeam);
+            
+            // Get the date from kickoff
+            const kickoffDate = new Date(match.kickoff);
+            const dateStr = kickoffDate.toISOString().slice(0, 10).replace(/-/g, '');
+            
+            // Try multiple ESPN league endpoints
+            const leagues = ['esp.1', 'esp.2', 'esp.copa_del_rey', 'esp.3', 'esp.rfef.1', 'esp.rfef.2'];
+            
+            for (const league of leagues) {
+              try {
+                const url = 'https://site.api.espn.com/apis/site/v2/sports/soccer/' + league + '/scoreboard?dates=' + dateStr;
+                const res = await fetch(url);
+                if (!res.ok) continue;
+                const data = await res.json();
+                
+                const events = data.events || [];
+                
+                for (const event of events) {
+                  const comp = event.competitions?.[0];
+                  if (!comp) continue;
+                  
+                  const homeComp = comp.competitors?.find(t => t.homeAway === 'home');
+                  const awayComp = comp.competitors?.find(t => t.homeAway === 'away');
+                  
+                  if (!homeComp || !awayComp) continue;
+                  
+                  const eventHome = normalize(homeComp.team?.displayName || homeComp.team?.name || '');
+                  const eventAway = normalize(awayComp.team?.displayName || awayComp.team?.name || '');
+                  
+                  // Check if teams match (fuzzy)
+                  const homeSimilar = eventHome.includes(homeNorm) || homeNorm.includes(eventHome) || 
+                                     levenshtein(eventHome, homeNorm) <= 3;
+                  const awaySimilar = eventAway.includes(awayNorm) || awayNorm.includes(eventAway) || 
+                                     levenshtein(eventAway, awayNorm) <= 3;
+                  
+                  if (homeSimilar && awaySimilar) {
+                    const homeScore = parseInt(homeComp.score, 10);
+                    const awayScore = parseInt(awayComp.score, 10);
+                    const status = event.status?.type?.description || '';
+                    
+                    console.log('Found in ' + league + ': ' + homeComp.team?.displayName + ' ' + homeScore + '-' + awayScore + ' ' + awayComp.team?.displayName + ' [' + status + ']');
+                    
+                    return {
+                      home: isNaN(homeScore) ? null : homeScore,
+                      away: isNaN(awayScore) ? null : awayScore,
+                      status: status,
+                      league: league
+                    };
+                  }
+                }
+              } catch (e) {
+                console.log('Error fetching ' + league + ': ' + e.message);
+              }
+            }
+            
+            return null;
+          }
+          
+          function levenshtein(a, b) {
+            const m = a.length, n = b.length;
+            const dp = Array.from({length: m + 1}, (_, i) => 
+              Array.from({length: n + 1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
+            for (let i = 1; i <= m; i++)
+              for (let j = 1; j <= n; j++)
+                dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 
+                  1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+            return dp[m][n];
+          }
+          
+          main().catch(e => { console.error('Fatal error:', e); process.exit(1); });
+          SCRIPT
+        env:
+          NODE_OPTIONS: '--experimental-fetch'
