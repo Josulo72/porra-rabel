@@ -105,12 +105,21 @@
       'madrid': 'https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg',
       'real madrid': 'https://upload.wikimedia.org/wikipedia/en/5/56/Real_Madrid_CF.svg',
       'barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
+      'fc barcelona': 'https://upload.wikimedia.org/wikipedia/en/4/47/FC_Barcelona_%28crest%29.svg',
       'ponferradina': 'https://upload.wikimedia.org/wikipedia/en/0/01/SD_Ponferradina_logo.png',
+      'sd ponferradina': 'https://upload.wikimedia.org/wikipedia/en/0/01/SD_Ponferradina_logo.png',
       'atlético de madrid': 'https://crests.football-data.org/78.svg',
       'atletico de madrid': 'https://crests.football-data.org/78.svg',
       'celta de vigo': 'https://upload.wikimedia.org/wikipedia/en/1/12/RC_Celta_de_Vigo_logo.svg',
       'aviles': 'https://tmssl.akamaized.net/images/wappen/head/26459.png',
       'avilés': 'https://tmssl.akamaized.net/images/wappen/head/26459.png',
+      'sevilla': 'https://upload.wikimedia.org/wikipedia/en/thumb/3/3b/Sevilla_FC_logo.svg/250px-Sevilla_FC_logo.svg.png',
+      'sevilla fc': 'https://upload.wikimedia.org/wikipedia/en/thumb/3/3b/Sevilla_FC_logo.svg/250px-Sevilla_FC_logo.svg.png',
+      'betis': 'https://upload.wikimedia.org/wikipedia/en/thumb/1/13/Real_betis_logo.svg/250px-Real_betis_logo.svg.png',
+      'real betis': 'https://upload.wikimedia.org/wikipedia/en/thumb/1/13/Real_betis_logo.svg/250px-Real_betis_logo.svg.png',
+      'arenteiro': 'https://upload.wikimedia.org/wikipedia/en/thumb/f/f8/CD_Arenteiro_logo.svg/250px-CD_Arenteiro_logo.svg.png',
+      'cd arenteiro': 'https://upload.wikimedia.org/wikipedia/en/thumb/f/f8/CD_Arenteiro_logo.svg/250px-CD_Arenteiro_logo.svg.png',
+      'club deportivo arenteiro': 'https://upload.wikimedia.org/wikipedia/en/thumb/f/f8/CD_Arenteiro_logo.svg/250px-CD_Arenteiro_logo.svg.png',
     };
 
     const defaultParticipants = Array.from({ length: 26 }).map((_, i) => ({
@@ -891,10 +900,36 @@
       const fetchTeamLogo = async (teamName) => {
         if (!teamName || getTeamLogo(teamName)) return;
         try {
-          const res = await fetch(`https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=${encodeURIComponent(teamName)}`);
-          const data = await res.json();
-          const logo = data?.teams?.[0]?.strBadge;
-          if (logo) setLogoCache((prev) => ({ ...prev, [teamName]: logo }));
+          // Search Wikipedia (English) for team logo
+          const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(teamName + ' football club')}&srnamespace=0&format=json&origin=*&srlimit=3`);
+          const wikiSearch = await wikiRes.json();
+          const articles = wikiSearch?.query?.search || [];
+          for (const article of articles) {
+            const title = article.title;
+            if (!title.toLowerCase().match(/stadium|season|temporada|estadio/)) {
+              const imgRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&format=json&pithumbsize=200&pilicense=any&origin=*`);
+              const imgData = await imgRes.json();
+              const pages = imgData?.query?.pages || {};
+              const page = Object.values(pages)[0];
+              const logo = page?.thumbnail?.source;
+              if (logo) { setLogoCache((prev) => ({ ...prev, [teamName]: logo })); return; }
+            }
+          }
+          // Fallback: search Spanish Wikipedia
+          const esRes = await fetch(`https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(teamName + ' fútbol')}&srnamespace=0&format=json&origin=*&srlimit=2`);
+          const esSearch = await esRes.json();
+          const esArticles = esSearch?.query?.search || [];
+          for (const article of esArticles) {
+            const title = article.title;
+            if (!title.toLowerCase().match(/estadio|temporada/)) {
+              const imgRes = await fetch(`https://es.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&format=json&pithumbsize=200&pilicense=any&origin=*`);
+              const imgData = await imgRes.json();
+              const pages = imgData?.query?.pages || {};
+              const page = Object.values(pages)[0];
+              const logo = page?.thumbnail?.source;
+              if (logo) { setLogoCache((prev) => ({ ...prev, [teamName]: logo })); return; }
+            }
+          }
         } catch {
           // silent fallback
         }
