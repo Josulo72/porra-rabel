@@ -2,7 +2,6 @@ name: Auto Update Match Results
 
 on:
   schedule:
-    # Run every 15 minutes during typical match hours (UTC: 14:00-23:00 = Spain 16:00-01:00)
     - cron: '0,15,30,45 14-22 * * *'
   workflow_dispatch:
     inputs:
@@ -20,203 +19,140 @@ jobs:
           node --experimental-fetch - <<'SCRIPT'
 
           const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwIo68AUaC7Sd9eXKWGUWcCP6Be24j-9TmkHNEVKSmfOVIT5fQen3Kq5mqWlwLSyXq86w/exec';
-
-          // ESPN league slugs to search (Spanish leagues in priority order)
-          const ESPN_LEAGUES = [
-            'esp.1',
-            'esp.2',
-            'esp.copa_del_rey',
-            'esp.super_cup',
-          ];
-
-          // Known ESPN team IDs for lower-division Spanish teams
-          const TEAM_ESPN_IDS = {
-            'arenteiro': 21288,
-            'cd arenteiro': 21288,
-            'ponferradina': 5463,
-            'sd ponferradina': 5463,
+          const ESPN_LEAGUES = ['esp.1', 'esp.2', 'esp.copa_del_rey'];
+          const SOFASCORE_TEAM_IDS = {
+            'arenteiro': 263555,
+            'cd arenteiro': 263555,
+            'ponferradina': 6195,
+            'sd ponferradina': 6195,
           };
 
           function normalize(s) {
-            return (s || '').toLowerCase()
-              .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-              .replace(/\bfc\b|\bcf\b|\bsd\b|\bcd\b|\bud\b|\bad\b|\breal\b|\batletico\b|\bathletic\b|\bdeportivo\b/g, '')
-              .replace(/[^a-z0-9 ]/g, '')
-              .replace(/\s+/g, ' ')
-              .trim();
+            return (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+              .replace(/\bfc\b|\bcf\b|\bsd\b|\bcd\b|\bud\b|\bad\b|\breal\b|\batletico\b|\bathletic\b|\bdeportivo\b/g,'')
+              .replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
           }
 
-          function levenshtein(a, b) {
-            const m = a.length, n = b.length;
-            if (m === 0) return n;
-            if (n === 0) return m;
-            const dp = Array.from({length: m + 1}, (_, i) =>
-              Array.from({length: n + 1}, (_, j) => i === 0 ? j : j === 0 ? i : 0));
-            for (let i = 1; i <= m; i++)
-              for (let j = 1; j <= n; j++)
-                dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] :
-                  1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
-            return dp[m][n];
-          }
+          function levenshtein(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;const dp=Array.from({length:m+1},(_,i)=>Array.from({length:n+1},(_,j)=>i?j?0:j:i));for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);return dp[m][n];}
 
-          function teamsMatch(name1, name2) {
-            const a = normalize(name1);
-            const b = normalize(name2);
-            if (!a || !b) return false;
-            if (a === b) return true;
-            if (a.includes(b) || b.includes(a)) return true;
-            if (a.length > 3 && b.length > 3 && levenshtein(a, b) <= 3) return true;
-            return false;
-          }
+          function teamsMatch(n1,n2){const a=normalize(n1),b=normalize(n2);if(!a||!b)return false;if(a===b||a.includes(b)||b.includes(a))return true;if(a.length>3&&b.length>3&&levenshtein(a,b)<=3)return true;return false;}
 
-          async function searchESPNLeague(league, homeTeam, awayTeam, dateStr) {
-            try {
-              const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=${dateStr}`;
-              const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-              if (!res.ok) return null;
-              const data = await res.json();
-              for (const event of (data.events || [])) {
-                const comp = event.competitions?.[0];
-                if (!comp) continue;
-                const homeComp = comp.competitors?.find(t => t.homeAway === 'home');
-                const awayComp = comp.competitors?.find(t => t.homeAway === 'away');
-                if (!homeComp || !awayComp) continue;
-                const eventHome = homeComp.team?.displayName || homeComp.team?.name || '';
-                const eventAway = awayComp.team?.displayName || awayComp.team?.name || '';
-                if (teamsMatch(eventHome, homeTeam) && teamsMatch(eventAway, awayTeam)) {
-                  const homeScore = parseInt(homeComp.score, 10);
-                  const awayScore = parseInt(awayComp.score, 10);
-                  const status = event.status?.type?.description || '';
-                  console.log(`  Encontrado en ${league}: ${eventHome} ${homeScore}-${awayScore} ${eventAway} [${status}]`);
-                  return { home: isNaN(homeScore) ? null : homeScore, away: isNaN(awayScore) ? null : awayScore, status, league };
+          async function getFromESPN(homeTeam,awayTeam,dateStr){
+            for(const league of ESPN_LEAGUES){
+              try{
+                const res=await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=${dateStr}`,{signal:AbortSignal.timeout(8000)});
+                if(!res.ok)continue;
+                const data=await res.json();
+                for(const event of (data.events||[])){
+                  const comp=event.competitions?.[0];
+                  const hC=comp?.competitors?.find(t=>t.homeAway==='home');
+                  const aC=comp?.competitors?.find(t=>t.homeAway==='away');
+                  if(!hC||!aC)continue;
+                  const eH=hC.team?.displayName||hC.team?.name||'';
+                  const eA=aC.team?.displayName||aC.team?.name||'';
+                  if(teamsMatch(eH,homeTeam)&&teamsMatch(eA,awayTeam)){
+                    const h=parseInt(hC.score,10),a=parseInt(aC.score,10);
+                    const status=event.status?.type?.description||'';
+                    console.log(`  ESPN ${league}: ${eH} ${h}-${a} ${eA} [${status}]`);
+                    return{home:isNaN(h)?null:h,away:isNaN(a)?null:a,status,source:'espn'};
+                  }
                 }
-              }
-            } catch (e) {
-              if (e.name !== 'AbortError' && e.name !== 'TimeoutError') {
-                console.log(`  Aviso ${league}: ${e.message}`);
-              }
+              }catch(e){console.log(`  ESPN ${league}: ${e.message}`);}
             }
             return null;
           }
 
-          async function searchByTeamId(homeTeam, awayTeam, dateStr) {
-            const homeId = TEAM_ESPN_IDS[normalize(homeTeam)];
-            const awayId = TEAM_ESPN_IDS[normalize(awayTeam)];
-            const teamId = homeId || awayId;
-            if (!teamId) return null;
-            const leagues = ['esp.1', 'esp.2', 'esp.copa_del_rey', 'esp.3', 'esp.rfef.1'];
-            const targetDate = dateStr.slice(0,4) + '-' + dateStr.slice(4,6) + '-' + dateStr.slice(6,8);
-            for (const league of leagues) {
-              try {
-                const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/teams/${teamId}/schedule?season=2026`;
-                const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-                if (!res.ok) continue;
-                const data = await res.json();
-                const matchEvent = (data.events || []).find(e => e.date?.startsWith(targetDate));
-                if (matchEvent) {
-                  const comp = matchEvent.competitions?.[0];
-                  const homeComp = comp?.competitors?.find(t => t.homeAway === 'home');
-                  const awayComp = comp?.competitors?.find(t => t.homeAway === 'away');
-                  const homeScore = parseInt(homeComp?.score, 10);
-                  const awayScore = parseInt(awayComp?.score, 10);
-                  const status = matchEvent.status?.type?.description || '';
-                  console.log(`  Encontrado por ID en ${league}: ${matchEvent.name} [${status}]`);
-                  return { home: isNaN(homeScore) ? null : homeScore, away: isNaN(awayScore) ? null : awayScore, status, league };
+          async function getFromSofascore(homeTeam,awayTeam,dateStr){
+            const homeId=SOFASCORE_TEAM_IDS[normalize(homeTeam)];
+            const awayId=SOFASCORE_TEAM_IDS[normalize(awayTeam)];
+            const teamId=homeId||awayId;
+            if(!teamId)return null;
+            console.log(`  Sofascore: buscando team ID ${teamId}...`);
+            const targetDate=dateStr.slice(0,4)+'-'+dateStr.slice(4,6)+'-'+dateStr.slice(6,8);
+            for(const ep of ['next/0','last/0']){
+              try{
+                const res=await fetch(`https://api.sofascore.com/api/v1/team/${teamId}/events/${ep}`,{
+                  headers:{'Accept':'application/json','User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36','Accept-Language':'es-ES,es;q=0.9','Referer':'https://www.sofascore.com/','Origin':'https://www.sofascore.com'},
+                  signal:AbortSignal.timeout(10000)
+                });
+                if(!res.ok){console.log(`  Sofascore ${ep}: HTTP ${res.status}`);continue;}
+                const data=await res.json();
+                for(const evt of (data.events||[])){
+                  const evtDate=new Date(evt.startTimestamp*1000).toISOString().slice(0,10);
+                  if(evtDate!==targetDate)continue;
+                  const eH=evt.homeTeam?.name||'';
+                  const eA=evt.awayTeam?.name||'';
+                  if(!teamsMatch(eH,homeTeam)||!teamsMatch(eA,awayTeam))continue;
+                  const h=evt.homeScore?.current;
+                  const a=evt.awayScore?.current;
+                  const status=evt.status?.description||evt.status?.type||'';
+                  console.log(`  Sofascore: ${eH} ${h}-${a} ${eA} [${status}]`);
+                  return{home:(h===null||h===undefined)?null:parseInt(h),away:(a===null||a===undefined)?null:parseInt(a),status,source:'sofascore'};
                 }
-              } catch (e) {}
+              }catch(e){console.log(`  Sofascore ${ep}: ${e.message}`);}
             }
             return null;
           }
 
-          async function getResult(match) {
-            const kickoffDate = new Date(match.kickoff);
-            const dateStr = kickoffDate.toISOString().slice(0, 10).replace(/-/g, '');
-            console.log(`  Buscando en ESPN para ${match.homeTeam} vs ${match.awayTeam} (fecha: ${dateStr})...`);
-            for (const league of ESPN_LEAGUES) {
-              const result = await searchESPNLeague(league, match.homeTeam, match.awayTeam, dateStr);
-              if (result) return result;
-            }
-            const result = await searchByTeamId(match.homeTeam, match.awayTeam, dateStr);
-            if (result) return result;
+          async function getResult(match){
+            const kickoffDate=new Date(match.kickoff);
+            const dateStr=kickoffDate.toISOString().slice(0,10).replace(/-/g,'');
+            console.log(`  Buscando: ${match.homeTeam} vs ${match.awayTeam}`);
+            const espnResult=await getFromESPN(match.homeTeam,match.awayTeam,dateStr);
+            if(espnResult)return espnResult;
+            const sofaResult=await getFromSofascore(match.homeTeam,match.awayTeam,dateStr);
+            if(sofaResult)return sofaResult;
             return null;
           }
 
-          async function main() {
+          async function main(){
             console.log('=== Actualizacion automatica de resultados ===');
-            console.log('Hora UTC:', new Date().toISOString());
-
-            const stateRes = await fetch(APPS_SCRIPT_URL + '?action=getState');
-            const stateData = await stateRes.json();
-            if (!stateData.ok || !stateData.state) {
-              console.log('ERROR: No se pudo obtener el estado:', JSON.stringify(stateData));
-              process.exit(1);
-            }
-
-            const state = stateData.state;
-            const matches = state.matches || [];
-            console.log('Partidos encontrados:', matches.length);
-
-            let updated = false;
-            const now = new Date();
-
-            for (const match of matches) {
-              console.log(`\n--- Partido ${match.id}: ${match.homeTeam} vs ${match.awayTeam} ---`);
-
-              if (match.source === 'espn' && match.result?.home !== null && match.result?.away !== null) {
-                console.log(`  Ya tiene resultado ESPN: ${match.result.home}-${match.result.away} (omitir)`);
-                continue;
+            console.log('Hora UTC:',new Date().toISOString());
+            const stateRes=await fetch(APPS_SCRIPT_URL+'?action=getState');
+            const stateData=await stateRes.json();
+            if(!stateData.ok||!stateData.state){console.log('ERROR:',JSON.stringify(stateData));process.exit(1);}
+            const state=stateData.state;
+            const matches=state.matches||[];
+            console.log('Partidos:',matches.length);
+            let updated=false;
+            const now=new Date();
+            for(const match of matches){
+              console.log(`\n--- ${match.id}: ${match.homeTeam} vs ${match.awayTeam} ---`);
+              if((match.source==='espn'||match.source==='sofascore')&&match.result?.home!==null&&match.result?.away!==null){
+                console.log(`  Ya tiene resultado [${match.source}]: ${match.result.home}-${match.result.away}`);continue;
               }
-
-              if (!match.kickoff) {
-                console.log('  Sin hora de inicio, omitir');
-                continue;
-              }
-
-              const kickoff = new Date(match.kickoff);
-              const minutesSince = (now - kickoff) / 60000;
-
-              if (minutesSince < 5) {
-                console.log(`  El partido empieza en ${Math.round(-minutesSince)} min`);
-                continue;
-              }
-              if (minutesSince > 480) {
-                console.log(`  Partido demasiado antiguo (${Math.round(minutesSince)} min), omitir`);
-                continue;
-              }
-
-              console.log(`  Partido empezado hace ${Math.round(minutesSince)} min`);
-              const result = await getResult(match);
-
-              if (result) {
-                const isFinished = /final|full time|\bft\b|terminado|ended|finished/i.test(result.status || '');
-                const likelyFinished = minutesSince > 105;
-                if (isFinished || likelyFinished) {
-                  match.result = { home: result.home, away: result.away };
-                  match.source = 'espn';
-                  match.lastUpdated = new Date().toISOString();
-                  updated = true;
-                  console.log(`  ACTUALIZADO: ${result.home}-${result.away} [${result.status}]`);
-                } else {
+              if(!match.kickoff){console.log('  Sin kickoff');continue;}
+              const kickoff=new Date(match.kickoff);
+              const mins=(now-kickoff)/60000;
+              if(mins<5){console.log(`  Empieza en ${Math.round(-mins)} min`);continue;}
+              if(mins>480){console.log(`  Demasiado antiguo (${Math.round(mins)} min)`);continue;}
+              console.log(`  Empezado hace ${Math.round(mins)} min`);
+              const result=await getResult(match);
+              if(result){
+                const isFinished=/ended|final|full time|\bft\b|terminado|finished/i.test(result.status||'');
+                const likelyFinished=mins>105;
+                if(isFinished||likelyFinished){
+                  match.result={home:result.home,away:result.away};
+                  match.source=result.source;
+                  match.lastUpdated=new Date().toISOString();
+                  updated=true;
+                  console.log(`  ACTUALIZADO: ${result.home}-${result.away} [${result.status}] via ${result.source}`);
+                }else{
                   console.log(`  En curso: ${result.home}-${result.away} [${result.status}]`);
                 }
-              } else {
-                console.log(`  Sin datos en ESPN. Actualizar manualmente en el panel admin.`);
+              }else{
+                console.log(`  Sin datos de ESPN ni Sofascore.`);
               }
             }
-
-            if (updated) {
-              console.log('\nGuardando estado en Apps Script...');
-              const saveRes = await fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'setState', state })
-              });
-              const saveData = await saveRes.json().catch(() => ({}));
-              console.log('Guardado:', JSON.stringify(saveData));
-            } else {
-              console.log('\nSin actualizaciones necesarias.');
+            if(updated){
+              console.log('\nGuardando en Apps Script...');
+              const saveRes=await fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'setState',state})});
+              const saveData=await saveRes.json().catch(()=>({}));
+              console.log('Resultado guardado:',JSON.stringify(saveData));
+            }else{
+              console.log('\nSin actualizaciones.');
             }
           }
 
-          main().catch(e => { console.error('Error fatal:', e.message || e); process.exit(1); });
+          main().catch(e=>{console.error('Error fatal:',e.message||e);process.exit(1);});
           SCRIPT
