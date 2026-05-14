@@ -10,7 +10,7 @@
     tailwind.config = {h
       theme: {
         extend: {
-          colors: {
+          colors: {x
             slateDeep: '#0f172a',
             neonBlue: '#38bdf8',
             neonBlueSoft: '#0ea5e9',
@@ -1259,39 +1259,102 @@
                     : 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.95)]';
 
               return (
-                <article key={match.id} className="glass rounded-2xl p-4 md:p-5">
-                  <p className="text-xs text-slate-400 mb-3">Partido {idx + 1}</p>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {homeLogo ? <img src={homeLogo} alt={match.homeTeam} className="w-10 h-10 object-contain" /> : <div className="w-10 h-10 rounded-full bg-slate-800 grid place-items-center text-xs">?</div>}
-                      <span className="font-semibold text-sm md:text-base team-name">{match.homeTeam || 'Local por definir'}</span>
-                    </div>
-                    <div className={`min-w-10 text-center px-3 py-1.5 rounded-md bg-slate-900/60 border border-slate-700 text-base ${homeFlash ? 'animate-goal text-lime-300' : ''}`}>
-                      {match.result.home ?? '-'}
-                    </div>
-                  </div>
-                  <div className="my-2 text-center text-slate-500 text-xs">VS</div>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {awayLogo ? <img src={awayLogo} alt={match.awayTeam} className="w-10 h-10 object-contain" /> : <div className="w-10 h-10 rounded-full bg-slate-800 grid place-items-center text-xs">?</div>}
-                      <span className="font-semibold text-sm md:text-base team-name">{match.awayTeam || 'Rival por definir'}</span>
-                    </div>
-                    <div className={`min-w-10 text-center px-3 py-1.5 rounded-md bg-slate-900/60 border border-slate-700 text-base ${awayFlash ? 'animate-goal text-rose-300' : ''}`}>
-                      {match.result.away ?? '-'}
+                <article key={match.id} className="glass rounded-2xl overflow-hidden">
+                  {/* Header with match number and phase */}
+                  <div className={
+                    phase.level === 'active'
+                      ? 'bg-lime-900/40 border-b border-lime-500/30 px-4 py-2 flex items-center justify-between'
+                      : phase.level === 'ended'
+                        ? 'bg-slate-900/60 border-b border-slate-700 px-4 py-2 flex items-center justify-between'
+                        : 'bg-slate-900/40 border-b border-slate-700/60 px-4 py-2 flex items-center justify-between'
+                  }>
+                    <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Partido {idx + 1}</span>
+                    <div className="inline-flex items-center gap-1.5">
+                      <span className={`inline-block w-2 h-2 rounded-full ${phaseDot}`} />
+                      <span className={`text-xs font-semibold ${phase.level === 'active' ? 'text-lime-300' : phase.level === 'ended' ? 'text-rose-300' : 'text-amber-300'}`}>{phase.text}</span>
                     </div>
                   </div>
-                  <div className="mt-4 text-xs text-slate-400 space-y-1">
-                    <div>Fecha/Hora: <span className="text-slate-200">{match.kickoff ? new Date(match.kickoff).toLocaleString('es-ES') : 'Sin programar'}</span></div>
-                    <div>Fuente: <span className="text-slate-200 uppercase">{match.source}</span></div>
-                    <div className="inline-flex items-center gap-2">
-                      <span className={`inline-block w-2.5 h-2.5 rounded-full ${phaseDot}`} />
-                      <span className="text-slate-200">{phase.text}</span>
+
+                  {/* Main scoreboard: logo - score - logo */}
+                  <div className="px-4 pt-4 pb-2">
+                    {/* Date/time */}
+                    {match.kickoff && (
+                      <p className="text-center text-[11px] text-slate-400 mb-3 font-mono">
+                        {new Date(match.kickoff).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                        {' '}{new Date(match.kickoff).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2">
+                      {/* Home team */}
+                      <div className="flex flex-col items-center gap-1.5 flex-1">
+                        <div className="w-16 h-16 rounded-xl bg-slate-800/80 p-1.5 flex items-center justify-center shadow-md">
+                          {homeLogo
+                            ? <img src={homeLogo} alt={match.homeTeam} className={`w-full h-full object-contain ${homeFlash ? 'animate-goal' : ''}`} />
+                            : <span className="text-2xl font-bold text-slate-500">{(match.homeTeam||'?')[0]}</span>
+                          }
+                        </div>
+                        <span className="text-xs font-semibold text-center leading-tight max-w-[80px] team-name">{match.homeTeam || 'Local'}</span>
+                      </div>
+
+                      {/* Score block */}
+                      <div className="flex flex-col items-center gap-0.5 min-w-[100px]">
+                        <div className="flex items-center gap-1">
+                          <span className={`text-4xl font-extrabold font-mono tabular-nums ${
+                            phase.level === 'active'
+                              ? (homeFlash ? 'text-lime-300 animate-goal' : 'text-white')
+                              : phase.level === 'ended'
+                                ? 'text-cyan-200'
+                                : 'text-slate-500'
+                          }`}>
+                            {phase.level === 'waiting'
+                              ? '-'
+                              : (match.result.home !== null && match.result.home !== undefined ? match.result.home : 0)
+                            }
+                          </span>
+                          <span className={`text-3xl font-bold ${phase.level === 'waiting' ? 'text-slate-600' : 'text-slate-400'}`}>-</span>
+                          <span className={`text-4xl font-extrabold font-mono tabular-nums ${
+                            phase.level === 'active'
+                              ? (awayFlash ? 'text-lime-300 animate-goal' : 'text-white')
+                              : phase.level === 'ended'
+                                ? 'text-cyan-200'
+                                : 'text-slate-500'
+                          }`}>
+                            {phase.level === 'waiting'
+                              ? '-'
+                              : (match.result.away !== null && match.result.away !== undefined ? match.result.away : 0)
+                            }
+                          </span>
+                        </div>
+                        {phase.level === 'active' && (
+                          <span className="text-[10px] text-lime-400 uppercase font-bold tracking-wider animate-pulse">EN VIVO</span>
+                        )}
+                        {phase.level === 'ended' && isResultSet(match.result) && (
+                          <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Final</span>
+                        )}
+                        {phase.level === 'waiting' && (
+                          <span className="text-[10px] text-amber-400/70 uppercase font-semibold tracking-wider">Pendiente</span>
+                        )}
+                      </div>
+
+                      {/* Away team */}
+                      <div className="flex flex-col items-center gap-1.5 flex-1">
+                        <div className="w-16 h-16 rounded-xl bg-slate-800/80 p-1.5 flex items-center justify-center shadow-md">
+                          {awayLogo
+                            ? <img src={awayLogo} alt={match.awayTeam} className={`w-full h-full object-contain ${awayFlash ? 'animate-goal' : ''}`} />
+                            : <span className="text-2xl font-bold text-slate-500">{(match.awayTeam||'?')[0]}</span>
+                          }
+                        </div>
+                        <span className="text-xs font-semibold text-center leading-tight max-w-[80px] team-name">{match.awayTeam || 'Visitante'}</span>
+                      </div>
                     </div>
+
+                    {/* Countdown */}
                     {(() => {
                       const cd = getCountdown(match);
                       if (!cd) return null;
                       return (
-                        <div className="mt-2 bg-amber-500/20 border border-amber-500/40 rounded-lg px-3 py-2 text-center">
+                        <div className="mt-3 bg-amber-500/20 border border-amber-500/40 rounded-lg px-3 py-2 text-center">
                           <p className="text-[10px] uppercase tracking-wider text-amber-300/80">Predicciones cierran en</p>
                           <p className="text-lg font-bold text-amber-200 font-mono">{cd}</p>
                         </div>
