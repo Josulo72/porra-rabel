@@ -125,11 +125,7 @@
     const defaultParticipants = Array.from({ length: 26 }).map((_, i) => ({
       id: crypto.randomUUID(),
       name: `Jugador ${String(i + 1).padStart(2, '0')}`,
-      predictions: [
-        { home: null, away: null },
-        { home: null, away: null },
-        { home: null, away: null },
-      ],
+      predictions: [null, null, null],
       locked: [false, false, false],
     }));
 
