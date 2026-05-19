@@ -627,11 +627,11 @@
           const existing = state.participants[idx];
           const existingPreds = existing.predictions || [{ home: null, away: null }, { home: null, away: null }, { home: null, away: null }];
           const existingLocks = existing.locked || [false, false, false];
-          const isBlocked = (i) => matchLocks[i] || existingLocks[i];
+          const isBlocked = (i) => matchLocks[i];
 
           const nextPreds = parsed.map((pr, i) => isBlocked(i) ? existingPreds[i] || { home: null, away: null } : pr);
           const nextLocks = existingLocks.map((lk, i) => {
-            if (lk) return true;
+            if (lk && matchLocks[i]) return true;
             if (matchLocks[i]) return true;
             return Number.isInteger(nextPreds[i].home) && Number.isInteger(nextPreds[i].away);
           });
