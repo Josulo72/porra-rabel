@@ -7,35 +7,21 @@
   <title>La Porra de Supervivencia</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = {h
+    tailwind.config = {
       theme: {
         extend: {
-          colors: {x
-            slateDeep: '#0f172a',
-            neonBlue: '#38bdf8',
-            neonBlueSoft: '#0ea5e9',
-            aliveGlow: '#22d3ee',
+          colors: {
+            night: '#04080d',
+            pitch: '#0a2416',
+            limeGlow: '#bef264',
           },
           fontFamily: {
-            inter: ['Inter', 'sans-serif'],
+            inter: ['Inter', 'system-ui', 'sans-serif'],
+            display: ['Oswald', '"Arial Narrow"', 'sans-serif'],
+            block: ['"Archivo Black"', 'Impact', 'sans-serif'],
           },
           boxShadow: {
-            neon: '0 0 0 1px rgba(56,189,248,.5), 0 0 24px rgba(34,211,238,.35)',
-          },
-          keyframes: {
-            pulseBorder: {
-              '0%, 100%': { boxShadow: '0 0 0 1px rgba(56,189,248,.45), 0 0 0 rgba(34,211,238,0)' },
-              '50%': { boxShadow: '0 0 0 2px rgba(34,211,238,.8), 0 0 22px rgba(34,211,238,.5)' },
-            },
-            blinkGoal: {
-              '0%': { transform: 'scale(1)', filter: 'brightness(1)' },
-              '50%': { transform: 'scale(1.08)', filter: 'brightness(1.45)' },
-              '100%': { transform: 'scale(1)', filter: 'brightness(1)' },
-            },
-          },
-          animation: {
-            alive: 'pulseBorder 2.2s ease-in-out infinite',
-            goal: 'blinkGoal 1s ease-out 2',
+            neon: '0 0 0 1px rgba(163,230,53,.28), 0 0 30px -6px rgba(163,230,53,.30)',
           },
         },
       },
@@ -43,31 +29,133 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
+    :root {
+      --lime: #a3e635;
+      --lime-soft: #bef264;
+      --cyan: #22d3ee;
+    }
+
+    /* ===== Estadio nocturno: cielo, focos y césped ===== */
+    /* Base sólida oscura en body; el decorado va en una capa fija (body::before),
+       porque background-attachment: fixed falla en Safari de iOS. */
     body {
-      background: radial-gradient(circle at 15% 10%, rgba(56, 189, 248, 0.09), transparent 35%),
-        radial-gradient(circle at 85% 90%, rgba(14, 165, 233, 0.12), transparent 35%), #0f172a;
+      color: #e9f1ec;
+      min-height: 100vh;
+      background-color: #04080d;
     }
 
+    /* Focos, franjas de césped y vignette, fijos tras el contenido */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(90deg,
+          rgba(255, 255, 255, 0.016) 0px, rgba(255, 255, 255, 0.016) 90px,
+          transparent 90px, transparent 180px),
+        radial-gradient(ellipse 130% 95% at 50% 115%, transparent 52%, rgba(1, 4, 8, 0.6) 100%),
+        radial-gradient(ellipse 95% 55% at 50% -14%, rgba(190, 242, 100, 0.14), transparent 62%),
+        radial-gradient(ellipse 44% 34% at 6% -6%, rgba(34, 211, 238, 0.13), transparent 72%),
+        radial-gradient(ellipse 44% 34% at 94% -6%, rgba(34, 211, 238, 0.10), transparent 72%),
+        linear-gradient(180deg, #04080d 0%, #071310 44%, #0a2416 100%);
+      z-index: 0;
+    }
+
+    #root {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ===== Paneles de cristal ===== */
     .glass {
-      background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.68));
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      backdrop-filter: blur(10px);
+      background: linear-gradient(165deg, rgba(17, 30, 25, 0.90), rgba(7, 14, 12, 0.74));
+      border: 1px solid rgba(163, 230, 53, 0.13);
+      box-shadow: 0 18px 42px -20px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
     }
 
+    /* ===== Tipografía de marcador ===== */
+    .score-num {
+      font-family: 'Oswald', 'Arial Narrow', sans-serif;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      letter-spacing: 0.01em;
+    }
+
+    .wordmark {
+      font-family: 'Archivo Black', Impact, sans-serif;
+      letter-spacing: 0.01em;
+      background: linear-gradient(98deg, #f4fde6 0%, #bef264 48%, #22d3ee 105%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 3px 20px rgba(163, 230, 53, 0.28));
+    }
+
+    /* ===== Entrada de tarjetas (escalonada vía animation-delay inline) ===== */
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(16px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .card-in { animation: cardIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    /* ===== Pulso de superviviente ===== */
+    @keyframes aliveGlow {
+      0%, 100% { box-shadow: 0 0 0 1px rgba(163, 230, 53, 0.35), 0 0 16px -7px rgba(163, 230, 53, 0.45); }
+      50% { box-shadow: 0 0 0 1.5px rgba(163, 230, 53, 0.8), 0 0 26px -4px rgba(163, 230, 53, 0.6); }
+    }
+
+    .animate-alive { animation: aliveGlow 2.6s ease-in-out infinite; }
+
+    /* ===== Flash de gol ===== */
+    @keyframes goalFlash {
+      0% { transform: scale(1); filter: brightness(1); }
+      16% { transform: scale(1.22); filter: brightness(1.7) drop-shadow(0 0 22px rgba(190, 242, 100, 0.95)); }
+      45% { transform: scale(1.04); filter: brightness(1.25) drop-shadow(0 0 10px rgba(190, 242, 100, 0.5)); }
+      100% { transform: scale(1); filter: brightness(1); }
+    }
+
+    .animate-goal { animation: goalFlash 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) 2; }
+
+    /* ===== Pulso EN VIVO ===== */
+    @keyframes livePing {
+      0% { box-shadow: 0 0 0 0 rgba(163, 230, 53, 0.6); }
+      70% { box-shadow: 0 0 0 9px rgba(163, 230, 53, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(163, 230, 53, 0); }
+    }
+
+    .live-dot { animation: livePing 1.5s cubic-bezier(0, 0, 0.2, 1) infinite; }
+
+    /* ===== Toasts ===== */
+    @keyframes toastIn {
+      from { opacity: 0; transform: translate(-50%, -18px) scale(0.94); }
+      to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    }
+
+    .toast-in { animation: toastIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+    /* ===== Eliminados: apagados con estilo, pero legibles ===== */
     .eliminated {
-      opacity: 0.3;
-      filter: grayscale(1);
+      opacity: 0.62;
+      filter: grayscale(0.85) brightness(0.9);
     }
 
     .tap-btn {
       min-height: 44px;
+      transition: transform 0.15s ease, background-color 0.2s ease, box-shadow 0.25s ease, opacity 0.2s ease, color 0.2s ease;
     }
+
+    .tap-btn:active { transform: scale(0.97); }
 
     .mobile-modal {
       max-height: calc(100vh - 1rem);
@@ -77,6 +165,26 @@
     .team-name {
       word-break: break-word;
       line-height: 1.2;
+    }
+
+    input, select, textarea { color-scheme: dark; }
+
+    input:focus-visible, button:focus-visible {
+      outline: 2px solid rgba(34, 211, 238, 0.65);
+      outline-offset: 1px;
+    }
+
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(163, 230, 53, 0.18); border-radius: 8px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(163, 230, 53, 0.32); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
     }
   </style>
 </head>
@@ -1227,26 +1335,31 @@
 
       return (
         <div className="space-y-5 md:space-y-6 pb-20 md:pb-6">
-          <header className="glass rounded-2xl p-5 md:p-7 shadow-neon">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <header className="glass rounded-3xl p-5 md:p-8 shadow-neon relative overflow-hidden card-in">
+            {/* Haz de luz decorativo */}
+            <div aria-hidden="true" className="absolute -top-24 left-1/2 -translate-x-1/2 w-[560px] h-56 rounded-full bg-lime-300/10 blur-3xl pointer-events-none" />
+            <div className="relative flex flex-col md:flex-row md:items-center md:justify-between gap-5">
               <div>
-                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-cyan-300">La Porra de Supervivencia</h1>
-                <p className="text-slate-300 text-sm md:text-base">Muerte súbita por orden cronológico en 3 partidos configurables por el administrador.</p>
+                <p className="font-display uppercase tracking-[0.35em] text-[11px] md:text-xs text-cyan-300/90 mb-1.5">Muerte súbita · 3 partidos · Sin segundas oportunidades</p>
+                <h1 className="wordmark text-3xl md:text-5xl leading-none uppercase">La Porra<br className="md:hidden" /> de Supervivencia</h1>
+                <p className="text-slate-400 text-sm md:text-base mt-2 max-w-xl">Acierta el resultado exacto o quedas fuera. Tres partidos por jornada, en orden cronológico.</p>
               </div>
-              <div className="text-left md:text-right">
-                <p className="text-xs uppercase tracking-widest text-slate-400">Supervivientes</p>
-                <p className="text-3xl font-bold text-cyan-200">{aliveCount} / {state.participants.length}</p>
+              <div className="shrink-0 rounded-2xl border border-lime-400/25 bg-lime-400/5 px-5 py-3.5 text-center self-start md:self-auto">
+                <p className="text-[10px] font-display uppercase tracking-[0.3em] text-lime-300/80">Supervivientes</p>
+                <p className="score-num text-4xl md:text-5xl text-lime-300 mt-1">
+                  {aliveCount}<span className="text-slate-500 text-2xl md:text-3xl"> / {state.participants.length}</span>
+                </p>
               </div>
             </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <button onClick={requestAdminAccess} className="tap-btn bg-slate-800 hover:bg-slate-700 rounded px-4 py-2 text-sm">
+            <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
+              <button onClick={requestAdminAccess} className="tap-btn bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-4 py-2 text-sm font-semibold text-slate-200">
                 {adminOpen && adminLogged ? 'Ocultar admin' : 'Acceso admin'}
               </button>
-              <p className="text-xs text-slate-500">Atajo: <span className="text-slate-300">Ctrl + Shift + A</span></p>
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 px-3 py-2 text-xs bg-slate-900/60">
+              <p className="text-xs text-slate-500">Atajo: <span className="text-slate-300 font-mono">Ctrl + Shift + A</span></p>
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3.5 py-2 text-xs bg-black/30">
                 <span
-                  className={`inline-block w-3 h-3 rounded-full ${scrapeStatus.level === 'active'
-                      ? 'bg-lime-400 shadow-[0_0_10px_rgba(74,222,128,0.95)]'
+                  className={`inline-block w-2.5 h-2.5 rounded-full ${scrapeStatus.level === 'active'
+                      ? 'bg-lime-400 shadow-[0_0_10px_rgba(163,230,53,0.95)] live-dot'
                       : scrapeStatus.level === 'waiting'
                         ? 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.95)]'
                         : scrapeStatus.level === 'error'
@@ -1254,16 +1367,16 @@
                           : 'bg-slate-500'
                     }`}
                 />
-                <span className="text-slate-200">{scrapeStatus.text}</span>
+                <span className="text-slate-300">{scrapeStatus.text}</span>
               </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 px-3 py-2 text-xs bg-slate-900/60">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3.5 py-2 text-xs bg-black/30">
                 <span
-                  className={`inline-block w-3 h-3 rounded-full ${storageMode === 'shared'
-                      ? 'bg-lime-400 shadow-[0_0_10px_rgba(74,222,128,0.95)]'
+                  className={`inline-block w-2.5 h-2.5 rounded-full ${storageMode === 'shared'
+                      ? 'bg-lime-400 shadow-[0_0_10px_rgba(163,230,53,0.95)]'
                       : 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.95)]'
                     }`}
                 />
-                <span className="text-slate-200">{storageMode === 'shared' ? 'Datos compartidos: ON' : 'Datos compartidos: OFF'}</span>
+                <span className="text-slate-300">{storageMode === 'shared' ? 'Datos compartidos: ON' : 'Datos compartidos: OFF'}</span>
               </div>
             </div>
           </header>
@@ -1283,75 +1396,93 @@
                     : 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.95)]';
 
               return (
-                <article key={match.id} className="glass rounded-2xl overflow-hidden">
-                  {/* Header with match number and phase */}
-                  <div className={
+                <article
+                  key={match.id}
+                  style={{ animationDelay: `${idx * 90}ms` }}
+                  className={`glass rounded-3xl overflow-hidden card-in relative ${phase.level === 'active' ? 'shadow-neon' : ''}`}
+                >
+                  {/* Resplandor superior según fase */}
+                  <div
+                    aria-hidden="true"
+                    className={`absolute inset-x-0 top-0 h-24 pointer-events-none bg-gradient-to-b ${
+                      phase.level === 'active'
+                        ? 'from-lime-400/15 to-transparent'
+                        : phase.level === 'ended'
+                          ? 'from-slate-400/10 to-transparent'
+                          : 'from-cyan-400/10 to-transparent'
+                    }`}
+                  />
+
+                  {/* Cabecera: número de partido y fase */}
+                  <div className={`relative px-4 py-2.5 flex items-center justify-between border-b ${
                     phase.level === 'active'
-                      ? 'bg-lime-900/40 border-b border-lime-500/30 px-4 py-2 flex items-center justify-between'
+                      ? 'border-lime-400/25 bg-lime-400/5'
                       : phase.level === 'ended'
-                        ? 'bg-slate-900/60 border-b border-slate-700 px-4 py-2 flex items-center justify-between'
-                        : 'bg-slate-900/40 border-b border-slate-700/60 px-4 py-2 flex items-center justify-between'
-                  }>
-                    <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Partido {idx + 1}</span>
-                    <div className="inline-flex items-center gap-1.5">
-                      <span className={`inline-block w-2 h-2 rounded-full ${phaseDot}`} />
-                      <span className={`text-xs font-semibold ${phase.level === 'active' ? 'text-lime-300' : phase.level === 'ended' ? 'text-rose-300' : 'text-amber-300'}`}>{phase.text}</span>
+                        ? 'border-white/10 bg-black/25'
+                        : 'border-white/10 bg-black/15'
+                  }`}>
+                    <span className="font-display text-xs font-semibold uppercase tracking-[0.28em] text-slate-400">Partido {idx + 1}</span>
+                    <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 ${
+                      phase.level === 'active' ? 'bg-lime-400/10 border border-lime-400/30' : 'bg-transparent'
+                    }`}>
+                      <span className={`inline-block w-2 h-2 rounded-full ${phaseDot} ${phase.level === 'active' ? 'live-dot' : ''}`} />
+                      <span className={`text-[11px] font-display font-semibold uppercase tracking-wider ${phase.level === 'active' ? 'text-lime-300' : phase.level === 'ended' ? 'text-rose-300' : 'text-amber-300'}`}>{phase.text}</span>
                     </div>
                   </div>
 
-                  {/* Main scoreboard: logo - score - logo */}
-                  <div className="px-4 pt-4 pb-2">
-                    {/* Date/time */}
+                  {/* Marcador principal: escudo - marcador - escudo */}
+                  <div className="relative px-4 pt-4 pb-3">
+                    {/* Fecha/hora */}
                     {match.kickoff && (
-                      <p className="text-center text-[11px] text-slate-400 mb-3 font-mono">
+                      <p className="text-center text-[11px] text-slate-500 mb-3 font-display tracking-[0.18em] uppercase">
                         {new Date(match.kickoff).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}
-                        {' '}{new Date(match.kickoff).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                        {' · '}{new Date(match.kickoff).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
                       </p>
                     )}
 
                     <div className="flex items-center justify-between gap-2">
-                      {/* Home team */}
-                      <div className="flex flex-col items-center gap-1.5 flex-1">
-                        <div className="w-16 h-16 rounded-xl bg-slate-800/80 p-1.5 flex items-center justify-center shadow-md">
+                      {/* Equipo local */}
+                      <div className="flex flex-col items-center gap-2 flex-1">
+                        <div className="w-[72px] h-[72px] rounded-2xl bg-gradient-to-b from-white/10 to-white/[0.03] border border-white/10 p-2 flex items-center justify-center shadow-[0_10px_24px_-12px_rgba(0,0,0,0.8)]">
                           {homeLogo
-                            ? <img src={homeLogo} alt={match.homeTeam} className={`w-full h-full object-contain ${homeFlash ? 'animate-goal' : ''}`} />
-                            : <span className="text-2xl font-bold text-slate-500">{(match.homeTeam||'?')[0]}</span>
+                            ? <img src={homeLogo} alt={match.homeTeam} className={`w-full h-full object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.6)] ${homeFlash ? 'animate-goal' : ''}`} />
+                            : <span className="font-display text-3xl font-bold text-slate-500">{(match.homeTeam||'?')[0]}</span>
                           }
                         </div>
-                        <span className="text-xs font-semibold text-center leading-tight max-w-[80px] team-name">{match.homeTeam || 'Local'}</span>
+                        <span className="text-xs font-semibold text-slate-200 text-center leading-tight max-w-[84px] team-name">{match.homeTeam || 'Local'}</span>
                       </div>
 
-                      {/* Score block */}
-                      <div className="flex flex-col items-center gap-0.5 min-w-[100px]">
-                        <div className="flex items-center gap-1">
-                          <span className={`text-4xl font-extrabold font-mono tabular-nums ${
+                      {/* Bloque de marcador */}
+                      <div className="flex flex-col items-center gap-1 min-w-[112px]">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className={`score-num text-6xl ${
                             phase.level === 'active'
                               ? (homeFlash ? 'text-lime-300 animate-goal' : 'text-white')
                               : phase.level === 'ended'
-                                ? 'text-cyan-200'
-                                : 'text-slate-500'
+                                ? 'text-lime-200'
+                                : 'text-slate-600'
                           }`}>
                             {phase.level === 'waiting'
-                              ? '-'
+                              ? '–'
                               : (match.result.home !== null && match.result.home !== undefined ? match.result.home : 0)
                             }
                           </span>
-                          <span className={`text-3xl font-bold ${phase.level === 'waiting' ? 'text-slate-600' : 'text-slate-400'}`}>-</span>
-                          <span className={`text-4xl font-extrabold font-mono tabular-nums ${
+                          <span className={`score-num text-3xl ${phase.level === 'waiting' ? 'text-slate-700' : 'text-slate-500'}`}>–</span>
+                          <span className={`score-num text-6xl ${
                             phase.level === 'active'
                               ? (awayFlash ? 'text-lime-300 animate-goal' : 'text-white')
                               : phase.level === 'ended'
-                                ? 'text-cyan-200'
-                                : 'text-slate-500'
+                                ? 'text-lime-200'
+                                : 'text-slate-600'
                           }`}>
                             {phase.level === 'waiting'
-                              ? '-'
+                              ? '–'
                               : (match.result.away !== null && match.result.away !== undefined ? match.result.away : 0)
                             }
                           </span>
                         </div>
                         {phase.level === 'active' && (
-                          <span className="text-[10px] text-lime-400 uppercase font-bold tracking-wider animate-pulse">
+                          <span className="mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-lime-400/15 border border-lime-400/40 px-2.5 py-1 text-[11px] text-lime-300 uppercase font-display font-semibold tracking-[0.14em] animate-pulse">
                             {match.live && /halftime|descanso/i.test(match.live.status || '')
                               ? 'DESCANSO'
                               : match.live && match.live.minute
@@ -1360,40 +1491,43 @@
                           </span>
                         )}
                         {phase.level === 'ended' && isResultSet(match.result) && (
-                          <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Final</span>
+                          <span className="text-[11px] text-slate-400 uppercase font-display font-semibold tracking-[0.22em]">Final</span>
                         )}
                         {phase.level === 'waiting' && (
-                          <span className="text-[10px] text-amber-400/70 uppercase font-semibold tracking-wider">Pendiente</span>
+                          <span className="text-[11px] text-amber-300/80 uppercase font-display font-semibold tracking-[0.22em]">Pendiente</span>
                         )}
                       </div>
 
-                      {/* Away team */}
-                      <div className="flex flex-col items-center gap-1.5 flex-1">
-                        <div className="w-16 h-16 rounded-xl bg-slate-800/80 p-1.5 flex items-center justify-center shadow-md">
+                      {/* Equipo visitante */}
+                      <div className="flex flex-col items-center gap-2 flex-1">
+                        <div className="w-[72px] h-[72px] rounded-2xl bg-gradient-to-b from-white/10 to-white/[0.03] border border-white/10 p-2 flex items-center justify-center shadow-[0_10px_24px_-12px_rgba(0,0,0,0.8)]">
                           {awayLogo
-                            ? <img src={awayLogo} alt={match.awayTeam} className={`w-full h-full object-contain ${awayFlash ? 'animate-goal' : ''}`} />
-                            : <span className="text-2xl font-bold text-slate-500">{(match.awayTeam||'?')[0]}</span>
+                            ? <img src={awayLogo} alt={match.awayTeam} className={`w-full h-full object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.6)] ${awayFlash ? 'animate-goal' : ''}`} />
+                            : <span className="font-display text-3xl font-bold text-slate-500">{(match.awayTeam||'?')[0]}</span>
                           }
                         </div>
-                        <span className="text-xs font-semibold text-center leading-tight max-w-[80px] team-name">{match.awayTeam || 'Visitante'}</span>
+                        <span className="text-xs font-semibold text-slate-200 text-center leading-tight max-w-[84px] team-name">{match.awayTeam || 'Visitante'}</span>
                       </div>
                     </div>
 
-                    {/* Goles y tarjetas */}
+                    {/* Goles y tarjetas: timeline a dos columnas */}
                     {Array.isArray(match.events) && match.events.length > 0 && (
-                      <div className="mt-3 border-t border-slate-700/60 pt-2 grid grid-cols-2 gap-x-3 text-[11px]">
-                        <div className="space-y-0.5">
+                      <div className="mt-4 rounded-xl bg-black/25 border border-white/[0.07] px-3 py-2.5 grid grid-cols-2 gap-x-3 text-[11px]">
+                        <div className="space-y-1 border-r border-white/[0.07] pr-2">
                           {match.events.filter((e) => e.side === 'home').map((e, i) => (
-                            <p key={`h${i}`} className={e.type === 'goal' ? 'text-slate-200' : 'text-slate-400'}>
-                              {e.type === 'goal' ? '⚽' : e.type === 'red' ? '🟥' : '🟨'}
-                              {e.minute ? ` ${e.minute}′` : ''} {e.player}
+                            <p key={`h${i}`} className={`flex items-baseline gap-1.5 ${e.type === 'goal' ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
+                              <span>{e.type === 'goal' ? '⚽' : e.type === 'red' ? '🟥' : '🟨'}</span>
+                              {e.minute ? <span className="font-display text-lime-300/90 shrink-0">{e.minute}′</span> : null}
+                              <span className="truncate">{e.player}</span>
                             </p>
                           ))}
                         </div>
-                        <div className="space-y-0.5 text-right">
+                        <div className="space-y-1 text-right pl-2">
                           {match.events.filter((e) => e.side === 'away').map((e, i) => (
-                            <p key={`a${i}`} className={e.type === 'goal' ? 'text-slate-200' : 'text-slate-400'}>
-                              {e.player}{e.minute ? ` ${e.minute}′` : ''} {e.type === 'goal' ? '⚽' : e.type === 'red' ? '🟥' : '🟨'}
+                            <p key={`a${i}`} className={`flex items-baseline justify-end gap-1.5 ${e.type === 'goal' ? 'text-slate-100 font-medium' : 'text-slate-400'}`}>
+                              <span className="truncate">{e.player}</span>
+                              {e.minute ? <span className="font-display text-lime-300/90 shrink-0">{e.minute}′</span> : null}
+                              <span>{e.type === 'goal' ? '⚽' : e.type === 'red' ? '🟥' : '🟨'}</span>
                             </p>
                           ))}
                         </div>
@@ -1405,9 +1539,9 @@
                       const cd = getCountdown(match);
                       if (!cd) return null;
                       return (
-                        <div className="mt-3 bg-amber-500/20 border border-amber-500/40 rounded-lg px-3 py-2 text-center">
-                          <p className="text-[10px] uppercase tracking-wider text-amber-300/80">Predicciones cierran en</p>
-                          <p className="text-lg font-bold text-amber-200 font-mono">{cd}</p>
+                        <div className="mt-4 rounded-xl bg-amber-400/[0.08] border border-amber-400/30 px-3 py-2.5 text-center">
+                          <p className="text-[10px] font-display uppercase tracking-[0.28em] text-amber-300/80">Predicciones cierran en</p>
+                          <p className="score-num text-2xl text-amber-200 mt-0.5">{cd}</p>
                         </div>
                       );
                     })()}
@@ -1417,16 +1551,16 @@
             })}
           </section>
 
-          <section className="glass rounded-2xl p-4 md:p-6">
+          <section className="glass rounded-3xl p-4 md:p-6 card-in" style={{ animationDelay: '260ms' }}>
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold text-cyan-300">Pronósticos participantes</h2>
-                <p className="text-sm text-slate-300">Usa el botón de tu tarjeta para poner tu apuesta antes de que empiece el partido.</p>
+                <h2 className="font-display text-lg md:text-xl font-semibold uppercase tracking-[0.14em] text-cyan-300">Pronósticos participantes</h2>
+                <p className="text-sm text-slate-400 mt-1">Usa el botón de tu tarjeta para poner tu apuesta antes de que empiece el partido.</p>
               </div>
               {!state.matches.every((m) => isMatchLocked(m)) && (
                 <button
                   onClick={openEntryModal}
-                  className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded-lg px-5 py-2.5 text-sm font-bold whitespace-nowrap"
+                  className="tap-btn bg-lime-400 hover:bg-lime-300 text-slate-950 rounded-xl px-6 py-3 text-sm font-extrabold whitespace-nowrap shadow-[0_8px_24px_-8px_rgba(163,230,53,0.7)]"
                 >
                   ＋ Nueva apuesta
                 </button>
@@ -1436,20 +1570,20 @@
           </section>
 
           {entryOpen && (
-            <section className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm p-2 md:p-4 grid place-items-center">
-              <div className="mobile-modal w-full max-w-2xl glass rounded-2xl p-4 md:p-6 space-y-4 border border-cyan-500/30">
+            <section className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-2 md:p-4 grid place-items-center">
+              <div className="mobile-modal w-full max-w-2xl glass rounded-3xl p-4 md:p-6 space-y-4 border border-lime-400/25 shadow-neon">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-bold text-cyan-300">Incluir resultados</h2>
-                  <button onClick={() => setEntryOpen(false)} className="text-slate-300 hover:text-white text-sm">Cerrar</button>
+                  <h2 className="font-display text-lg font-semibold uppercase tracking-[0.14em] text-lime-300">Tu pronóstico</h2>
+                  <button onClick={() => setEntryOpen(false)} className="tap-btn text-slate-300 hover:text-white text-sm px-3 rounded-xl bg-white/5 border border-white/10">Cerrar</button>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400">Nombre del participante</label>
+                  <label className="text-xs font-display uppercase tracking-[0.18em] text-slate-400">Nombre del participante</label>
                   <input
                     value={entryName}
                     onChange={(e) => setEntryName(e.target.value)}
                     placeholder="Ej: DIAMANTE 1"
                     readOnly={Boolean(entryParticipantId)}
-                    className="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                    className="w-full mt-1.5 bg-black/40 border border-white/15 rounded-xl px-3.5 py-3 text-base md:text-sm text-slate-100 placeholder:text-slate-600 focus:border-lime-400/50"
                   />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1457,10 +1591,10 @@
                     const blocked = isMatchLocked(m) || entryLocks[i];
                     const blockLabel = entryLocks[i] ? 'Ya enviado' : 'Cerrado';
                     return (
-                      <div key={m.id} className="rounded-xl bg-slate-950/35 p-3 border border-slate-700 space-y-2">
+                      <div key={m.id} className={`rounded-2xl p-3 space-y-2.5 border ${blocked ? 'bg-black/20 border-white/10' : 'bg-black/30 border-lime-400/20'}`}>
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm text-slate-200 font-semibold">P{i + 1}: {m.homeTeam} vs {m.awayTeam || 'Rival'}</p>
-                          {blocked && <span className="text-[10px] uppercase bg-rose-800/70 text-rose-100 px-2 py-1 rounded">{blockLabel}</span>}
+                          <p className="text-sm text-slate-200 font-semibold"><span className="font-display text-lime-300/90 mr-1">P{i + 1}</span>{m.homeTeam} vs {m.awayTeam || 'Rival'}</p>
+                          {blocked && <span className="text-[10px] font-display uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-200 px-2 py-1 rounded-full">{blockLabel}</span>}
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                           <input
@@ -1470,7 +1604,7 @@
                             onChange={(e) => updateEntryPred(i, 'home', e.target.value)}
                             placeholder="Local"
                             disabled={blocked}
-                            className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                            className="bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-center score-num text-xl text-slate-100 placeholder:text-slate-600 placeholder:font-inter placeholder:text-sm disabled:opacity-40"
                           />
                           <input
                             type="number"
@@ -1479,7 +1613,7 @@
                             onChange={(e) => updateEntryPred(i, 'away', e.target.value)}
                             placeholder="Visitante"
                             disabled={blocked}
-                            className="bg-slate-900 border border-slate-700 rounded px-3 py-2.5 text-base md:text-sm"
+                            className="bg-black/40 border border-white/15 rounded-xl px-3 py-3 text-center score-num text-xl text-slate-100 placeholder:text-slate-600 placeholder:font-inter placeholder:text-sm disabled:opacity-40"
                           />
                         </div>
                       </div>
@@ -1487,18 +1621,18 @@
                   })}
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <button onClick={() => setEntryOpen(false)} className="tap-btn bg-slate-700 hover:bg-slate-600 rounded px-4 py-2 text-sm">Cancelar</button>
-                  <button onClick={saveParticipantPrediction} className="tap-btn bg-cyan-700 hover:bg-cyan-600 rounded px-4 py-2 text-sm font-semibold">Guardar</button>
+                  <button onClick={() => setEntryOpen(false)} className="tap-btn bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-5 py-2.5 text-sm text-slate-200">Cancelar</button>
+                  <button onClick={saveParticipantPrediction} className="tap-btn bg-lime-400 hover:bg-lime-300 text-slate-950 rounded-xl px-6 py-2.5 text-sm font-extrabold shadow-[0_8px_24px_-8px_rgba(163,230,53,0.7)]">Guardar</button>
                 </div>
               </div>
             </section>
           )}
 
           {adminOpen && adminLogged && (
-            <section className="glass rounded-2xl p-4 md:p-6 space-y-5 border-cyan-500/30">
+            <section className="glass rounded-3xl p-4 md:p-6 space-y-5 border border-cyan-400/25">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="font-bold text-cyan-300">Panel de Control (Admin)</h2>
-                <button onClick={doAdminLogout} className="tap-btn bg-rose-700 hover:bg-rose-600 rounded px-3 py-2 text-sm">
+                <h2 className="font-display text-lg font-semibold uppercase tracking-[0.14em] text-cyan-300">Panel de Control (Admin)</h2>
+                <button onClick={doAdminLogout} className="tap-btn bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 rounded-xl px-4 py-2 text-sm font-semibold">
                   Salir admin
                 </button>
               </div>
@@ -1652,9 +1786,9 @@
           )}
 
           {adminLoginOpen && (
-            <section className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm p-2 md:p-4 grid place-items-center">
-              <div className="mobile-modal w-full max-w-md glass rounded-2xl p-4 md:p-6 space-y-4 border border-cyan-500/30">
-                <h2 className="text-lg font-bold text-cyan-300">Acceso administrador</h2>
+            <section className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-2 md:p-4 grid place-items-center">
+              <div className="mobile-modal w-full max-w-md glass rounded-3xl p-4 md:p-6 space-y-4 border border-cyan-400/25">
+                <h2 className="font-display text-lg font-semibold uppercase tracking-[0.14em] text-cyan-300">Acceso administrador</h2>
                 <div>
                   <label className="text-xs text-slate-400">Usuario</label>
                   <input
@@ -1691,9 +1825,8 @@
           )}
 
           <section>
-            <h2 className="mb-3 text-lg font-bold text-slate-200">Participantes</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-              {[...evaluatedParticipants].sort((a, b) => {
+            {(() => {
+              const sorted = [...evaluatedParticipants].sort((a, b) => {
                 // Vivos primero, luego eliminados
                 if (a.status === 'alive' && b.status !== 'alive') return -1;
                 if (a.status !== 'alive' && b.status === 'alive') return 1;
@@ -1710,92 +1843,154 @@
                 }
                 // Mismo grupo: ordenación natural (Diamante 2 antes que Diamante 11)
                 return a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' });
-              }).map((p) => (
-                (() => {
-                  const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
-                  const lightClass = p.status === 'eliminated'
-                    ? 'bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.95)]'
-                    : hasFullPrediction
-                      ? 'bg-lime-400 shadow-[0_0_12px_rgba(74,222,128,0.95)] animate-pulse'
-                      : 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.95)] animate-pulse';
-                  const lightTitle = p.status === 'eliminated' ? 'Eliminado' : hasFullPrediction ? 'Pronóstico completo' : 'Pronóstico incompleto';
-                  const cardClass = p.status === 'eliminated'
-                    ? 'border-slate-700 eliminated'
-                    : hasFullPrediction
-                      ? 'border-cyan-500 animate-alive'
-                      : 'border-amber-500/70';
-                  return (
-                    <article
-                      key={p.id}
-                      className={`rounded-xl border p-3 relative bg-slate-900/45 ${cardClass}`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <h3 className="font-semibold">{p.name}</h3>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`inline-block w-3 h-3 rounded-full ${lightClass}`}
-                            title={lightTitle}
-                          />
-                          {p.status === 'eliminated' && <span className="text-rose-500 font-extrabold">X</span>}
+              });
+              const aliveList = sorted.filter((p) => p.status === 'alive');
+              const outList = sorted.filter((p) => p.status !== 'alive');
+              const totalCount = evaluatedParticipants.length;
+              const alivePct = totalCount ? Math.round((aliveList.length / totalCount) * 100) : 0;
+
+              const renderCard = (p) => {
+                const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+                const lightClass = p.status === 'eliminated'
+                  ? 'bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.95)]'
+                  : hasFullPrediction
+                    ? 'bg-lime-400 shadow-[0_0_12px_rgba(163,230,53,0.95)] animate-pulse'
+                    : 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.95)] animate-pulse';
+                const lightTitle = p.status === 'eliminated' ? 'Eliminado' : hasFullPrediction ? 'Pronóstico completo' : 'Pronóstico incompleto';
+                const cardClass = p.status === 'eliminated'
+                  ? 'border-white/10 eliminated'
+                  : hasFullPrediction
+                    ? 'border-lime-400/40 animate-alive'
+                    : 'border-amber-400/60';
+                const editionClosed = state.matches.every((m) => isMatchLocked(m));
+                const allSent = p.locked && p.locked.every(Boolean);
+                const canBet = !editionClosed && !allSent;
+                return (
+                  <article
+                    key={p.id}
+                    className={`rounded-2xl border px-3 py-2.5 relative bg-black/30 ${cardClass}`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className={`shrink-0 inline-block w-2.5 h-2.5 rounded-full ${lightClass}`}
+                        title={lightTitle}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <h3 className="font-semibold text-sm text-slate-100 truncate">{p.name}</h3>
+                          {p.status === 'eliminated' && (
+                            <span className="shrink-0 text-[9px] font-display font-semibold uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-full px-2 py-0.5">
+                              Eliminado P{p.eliminatedAt}
+                            </span>
+                          )}
                         </div>
-                      </div>
-                      <p className="text-xs mt-2 text-slate-400">
-                        {p.status === 'alive' ? 'Sigue con vida' : `ELIMINADO en Partido ${p.eliminatedAt}`}
-                      </p>
-                      <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
-                        {p.predictions.map((pr, i) => {
-                          const mr = state.matches[i]?.result;
-                          const hasResult = mr && Number.isInteger(mr.home) && Number.isInteger(mr.away);
-                          const hasPred = pr && Number.isInteger(pr.home) && Number.isInteger(pr.away);
-                          const hit = hasResult && hasPred && Number(pr.home) === mr.home && Number(pr.away) === mr.away;
-                          const miss = hasResult && (!hasPred || !hit);
-                          const borderColor = hit ? 'border-lime-500 bg-lime-950/40' : miss ? 'border-rose-500/60 bg-rose-950/30' : 'border-slate-800 bg-slate-950/65';
-                          return (
-                            <div key={i} className={`rounded px-2 py-1 text-center border ${borderColor}`}>
-                              {pr.home ?? '-'}-{pr.away ?? '-'}
-                              {hit && <span className="ml-1 text-lime-400">✓</span>}
-                              {miss && <span className="ml-1 text-rose-400">✗</span>}
-                            </div>
-                          );
-                        })}
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          {p.predictions.map((pr, i) => {
+                            const mr = state.matches[i]?.result;
+                            const hasResult = mr && Number.isInteger(mr.home) && Number.isInteger(mr.away);
+                            const hasPred = pr && Number.isInteger(pr.home) && Number.isInteger(pr.away);
+                            const hit = hasResult && hasPred && Number(pr.home) === mr.home && Number(pr.away) === mr.away;
+                            const miss = hasResult && (!hasPred || !hit);
+                            const chipClass = hit
+                              ? 'border-lime-400/60 bg-lime-400/10 text-lime-300'
+                              : miss
+                                ? 'border-rose-500/50 bg-rose-500/10 text-rose-300'
+                                : 'border-white/10 bg-white/[0.04] text-slate-300';
+                            return (
+                              <span key={i} className={`score-num text-[13px] rounded-lg px-2 py-1 text-center border leading-none ${chipClass}`}>
+                                {pr.home ?? '-'}-{pr.away ?? '-'}
+                                {hit && <span className="ml-1">✓</span>}
+                                {miss && <span className="ml-1">✗</span>}
+                              </span>
+                            );
+                          })}
+                        </div>
                       </div>
                       <button
                         onClick={() => openEntryModalForParticipant(p)}
                         disabled={state.matches.every((m) => isMatchLocked(m)) || (p.locked && p.locked.every(Boolean))}
-                        className="tap-btn mt-3 w-full bg-cyan-700 hover:bg-cyan-600 rounded px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                        className={`tap-btn shrink-0 w-[96px] rounded-xl px-2 py-2 text-[11px] font-bold leading-tight text-center ${
+                          canBet
+                            ? 'bg-lime-400 hover:bg-lime-300 text-slate-950 shadow-[0_6px_18px_-6px_rgba(163,230,53,0.7)]'
+                            : 'bg-white/[0.06] border border-white/10 text-slate-300'
+                        } disabled:opacity-60`}
                       >
                         {(p.locked && p.locked.every(Boolean)) ? 'Pronóstico enviado ✓' : state.matches.every((m) => isMatchLocked(m)) ? 'Edición cerrada' : 'Poner resultado'}
                       </button>
-                      {adminOpen && adminLogged && (
-                        <button
-                          onClick={() => resetParticipantPredictions(p.id)}
-                          className="tap-btn mt-2 w-full bg-rose-800 hover:bg-rose-700 rounded px-3 py-2 text-sm font-semibold"
-                        >
-                          Reset participante
-                        </button>
-                      )}
-                    </article>
-                  );
-                })()
-              ))}
-            </div>
+                    </div>
+                    {adminOpen && adminLogged && (
+                      <button
+                        onClick={() => resetParticipantPredictions(p.id)}
+                        className="tap-btn mt-2 w-full bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-200 rounded-xl px-3 py-2 text-xs font-semibold"
+                      >
+                        Reset participante
+                      </button>
+                    )}
+                  </article>
+                );
+              };
+
+              return (
+                <React.Fragment>
+                  {/* Barra resumen sticky: el marcador de la porra */}
+                  <div className="sticky top-2 z-30 glass rounded-2xl px-4 py-3 mb-4 shadow-[0_14px_34px_-14px_rgba(0,0,0,0.85)]">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-baseline gap-2">
+                        <span className="score-num text-3xl text-lime-300">{aliveList.length}</span>
+                        <span className="font-display text-[11px] font-semibold uppercase tracking-[0.22em] text-lime-300/80">siguen vivos</span>
+                      </div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="score-num text-xl text-rose-400">{outList.length}</span>
+                        <span className="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-300/70">eliminados</span>
+                      </div>
+                      <span className="font-display text-[10px] uppercase tracking-[0.2em] text-slate-500">{totalCount} en juego</span>
+                    </div>
+                    <div className="mt-2.5 h-1.5 rounded-full bg-rose-500/20 overflow-hidden" role="img" aria-label={`${alivePct}% de participantes vivos`}>
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-lime-400 to-cyan-400 transition-all duration-700 ease-out"
+                        style={{ width: `${alivePct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Vivos */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                    {aliveList.map(renderCard)}
+                  </div>
+
+                  {/* Eliminados */}
+                  {outList.length > 0 && (
+                    <React.Fragment>
+                      <div className="flex items-center gap-3 mt-6 mb-3">
+                        <span className="h-px flex-1 bg-gradient-to-r from-transparent via-rose-500/40 to-transparent" />
+                        <h2 className="font-display text-xs font-semibold uppercase tracking-[0.3em] text-rose-300/80">Caídos en combate</h2>
+                        <span className="h-px flex-1 bg-gradient-to-r from-transparent via-rose-500/40 to-transparent" />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                        {outList.map(renderCard)}
+                      </div>
+                    </React.Fragment>
+                  )}
+                </React.Fragment>
+              );
+            })()}
           </section>
 
           {/* Toast de gol */}
           {goalToast && (
-            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] animate-bounce">
-              <div className="bg-gradient-to-r from-lime-600 to-emerald-600 text-white px-6 py-4 rounded-2xl shadow-2xl border-2 border-lime-300/50 text-center min-w-[280px]">
-                <p className="text-2xl font-extrabold">{goalToast.msg}</p>
-                <p className="text-sm mt-1 opacity-90">{goalToast.full}</p>
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] toast-in">
+              <div className="bg-gradient-to-br from-lime-500 via-lime-600 to-emerald-700 text-slate-950 px-6 py-4 rounded-2xl shadow-[0_18px_50px_-12px_rgba(163,230,53,0.65)] border-2 border-lime-200/60 text-center min-w-[280px]">
+                <p className="score-num text-2xl">{goalToast.msg}</p>
+                <p className="text-sm mt-1 font-semibold opacity-80">{goalToast.full}</p>
               </div>
             </div>
           )}
 
           {/* Toast de guardado */}
           {saveToast && (
-            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70]">
-              <div className="bg-gradient-to-r from-cyan-700 to-emerald-700 text-white px-5 py-3 rounded-xl shadow-2xl border border-cyan-300/40 text-center min-w-[260px]">
-                <p className="text-sm font-semibold">✓ {saveToast}</p>
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70] toast-in">
+              <div className="glass border border-lime-400/40 text-slate-100 px-5 py-3 rounded-2xl shadow-[0_16px_40px_-14px_rgba(0,0,0,0.9)] text-center min-w-[260px]">
+                <p className="text-sm font-semibold"><span className="text-lime-300">✓</span> {saveToast}</p>
               </div>
             </div>
           )}
@@ -1804,7 +1999,7 @@
           {notifPermission !== 'granted' && typeof Notification !== 'undefined' && (
             <button
               onClick={requestNotifPermission}
-              className="fixed bottom-4 right-4 z-50 bg-cyan-700 hover:bg-cyan-600 text-white rounded-full px-4 py-3 text-xs font-semibold shadow-lg"
+              className="tap-btn fixed bottom-4 right-4 z-50 bg-lime-400 hover:bg-lime-300 text-slate-950 rounded-full px-5 py-3 text-xs font-extrabold shadow-[0_12px_30px_-8px_rgba(163,230,53,0.8)]"
             >
               🔔 Activar notificaciones de gol
             </button>
