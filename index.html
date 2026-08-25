@@ -349,37 +349,85 @@
         }
       };
 
+      const adminTouchedRef = useRef(new Set());
+      const adminBulkRef = useRef(false);
+
       const saveSharedState = async (nextState) => {
         if (!sharedApiConfigured() || storageMode !== 'shared') return;
         try {
+          let stateToSend = nextState;
+          try {
+            const res = await fetch(`${API_BASE}?action=getState`, { method: 'GET' });
+            const data = await res.json();
+            const server = data?.state;
+            if (server && Array.isArray(server.participants)) {
+              const touched = adminTouchedRef.current;
+              const bulk = adminBulkRef.current;
+              const locals = [...(nextState.participants || [])];
+              const byId = new Map(locals.map((p, i) => [p.id, i]));
+              const byName = new Map(locals.map((p, i) => [String(p.name || '').trim().toLowerCase(), i]));
+              for (const sp of server.participants) {
+                const li = byId.has(sp.id) ? byId.get(sp.id) : byName.get(String(sp.name || '').trim().toLowerCase());
+                if (li === undefined) {
+                  if (!touched.has(sp.id)) locals.push(sp);
+                  continue;
+                }
+                if (bulk || touched.has(locals[li].id)) continue;
+                const lp = locals[li];
+                const preds = [...(lp.predictions || [])];
+                const locks = [...(lp.locked || [false, false, false])];
+                let changed = false;
+                for (let i = 0; i < 3; i++) {
+                  const sLock = Boolean(sp.locked?.[i]);
+                  const sPred = sp.predictions?.[i];
+                  const lHasPred = Number.isInteger(preds[i]?.home) && Number.isInteger(preds[i]?.away);
+                  if (sLock && !locks[i] && !lHasPred && sPred) {
+                    preds[i] = { home: sPred.home, away: sPred.away };
+                    locks[i] = true;
+                    changed = true;
+                  }
+                }
+                if (changed) locals[li] = { ...lp, predictions: preds, locked: locks };
+              }
+              stateToSend = { ...nextState, participants: locals };
+            }
+          } catch {
+            // si falla la lectura previa, enviar tal cual
+          }
           const body = JSON.stringify({
             action: 'setState',
-            state: nextState,
+            state: stateToSend,
           });
-          await fetch(API_BASE, {
+          const postRes = await fetch(API_BASE, {
             method: 'POST',
             body,
           });
+          if (postRes.ok) {
+            adminTouchedRef.current = new Set();
+            adminBulkRef.current = false;
+          }
         } catch {
           pushLog('Error guardando en backend compartido');
         }
       };
 
-      // Actualización atómica de un solo participante (evita race conditions)
+      // Actualización atómica de un solo participante (evita race conditions).
+      // Reintenta hasta 3 veces y devuelve true solo si el servidor confirmó.
       const saveParticipantRemote = async (participant) => {
-        if (!sharedApiConfigured() || storageMode !== 'shared') return;
-        try {
-          const body = JSON.stringify({
-            action: 'updateParticipant',
-            participant,
-          });
-          await fetch(API_BASE, {
-            method: 'POST',
-            body,
-          });
-        } catch {
-          pushLog('Error guardando participante en backend');
+        if (!sharedApiConfigured() || storageMode !== 'shared') return true;
+        const body = JSON.stringify({ action: 'updateParticipant', participant });
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const res = await fetch(API_BASE, { method: 'POST', body });
+            const data = await res.json().catch(() => null);
+            if (res.ok && data && data.ok !== false) return true;
+          } catch {
+            // reintentar
+          }
+          await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
         }
+        pushLog('Error guardando participante en backend');
+        return false;
       };
 
       useEffect(() => {
@@ -407,6 +455,7 @@
 
       useEffect(() => {
         if (storageMode !== 'shared') return;
+        if (!adminLogged) return;
         if (saveTimer.current) clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => {
           saveSharedState(state);
@@ -414,7 +463,7 @@
         return () => {
           if (saveTimer.current) clearTimeout(saveTimer.current);
         };
-      }, [state, storageMode]);
+      }, [state, storageMode, adminLogged]);
 
       useEffect(() => {
         localStorage.setItem(ADMIN_KEY, adminOpen ? '1' : '0');
@@ -562,6 +611,7 @@
       };
 
       const swapHomeAway = (index) => {
+        adminBulkRef.current = true;
         setState((prev) => {
           const matches = [...prev.matches];
           const m = { ...matches[index] };
@@ -617,7 +667,7 @@
         setTimeout(() => setSaveToast(null), 2200);
       };
 
-      const saveParticipantPrediction = () => {
+      const saveParticipantPrediction = async () => {
         const cleanName = entryName.trim();
         if (!cleanName) {
           setSubmitMsg('Escribe tu nombre.');
@@ -695,9 +745,24 @@
         setState((prev) => ({ ...prev, participants: nextParticipants }));
         setSubmitMsg('');
         setEntryOpen(false);
-        if (savedParticipant) saveParticipantRemote(savedParticipant);
-        showSaveToast(outcome);
         scrollToTop();
+        if (savedParticipant) {
+          const ok = await saveParticipantRemote(savedParticipant);
+          if (ok) {
+            showSaveToast(outcome);
+            if (storageMode === 'shared') loadSharedState();
+          } else {
+            showSaveToast('⚠️ No se pudo guardar en el servidor. Comprueba tu conexión y vuelve a intentarlo.');
+            setState((prev) => ({
+              ...prev,
+              participants: prev.participants.map((p) =>
+                p.id === savedParticipant.id ? { ...p, locked: [false, false, false] } : p
+              ),
+            }));
+          }
+        } else {
+          showSaveToast(outcome);
+        }
       };
 
       const pushLog = (text) => {
@@ -1113,6 +1178,7 @@
             const arr = JSON.parse(text);
             const parsed = arr.map(normalizeParticipantRow).filter(Boolean);
             if (parsed.length) {
+              adminBulkRef.current = true;
               setState((prev) => {
                 const result = mergeImportedParticipants(prev, parsed);
                 pushLog(`JSON: ${result.added} nuevos, ${result.updated} actualizados (sin borrar existentes)`);
@@ -1136,6 +1202,7 @@
             }
 
             if (parsed.length) {
+              adminBulkRef.current = true;
               setState((prev) => {
                 const result = mergeImportedParticipants(prev, parsed);
                 pushLog(`Excel: ${result.added} nuevos, ${result.updated} actualizados (sin borrar existentes)`);
@@ -1183,6 +1250,7 @@
 
       const resetRound = () => {
         if (!confirm('Se borrarán resultados de partidos Y pronósticos de todos los participantes. ¿Continuar?')) return;
+        adminBulkRef.current = true;
         scrollToTop();
         setState((prev) => ({
           ...prev,
@@ -1205,6 +1273,7 @@
         const participant = state.participants.find((p) => p.id === participantId);
         if (!participant) return;
         if (!confirm(`Se borrarán los 3 pronósticos de ${participant.name}. ¿Continuar?`)) return;
+        adminTouchedRef.current.add(participantId);
         scrollToTop();
         setState((prev) => ({
           ...prev,
