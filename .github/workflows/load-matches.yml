@@ -203,6 +203,20 @@ jobs:
               slot.lastUpdated = new Date().toISOString();
               updated = true;
               console.log(`\nHueco ${team.slot + 1} ACTUALIZADO: ${cand.homeTeam} vs ${cand.awayTeam} | ${newKickoff}`);
+
+              // Partido nuevo en este hueco: resetear los pronosticos de ESTE
+              // hueco para todos los participantes (jornada nueva). Los otros
+              // huecos no se tocan, por si su partido sigue en juego.
+              let cleared = 0;
+              for (const p of (state.participants || [])) {
+                if (Array.isArray(p.predictions) && p.predictions[team.slot] &&
+                    (p.predictions[team.slot].home !== null || p.predictions[team.slot].away !== null)) {
+                  cleared++;
+                }
+                if (Array.isArray(p.predictions)) p.predictions[team.slot] = { home: null, away: null };
+                if (Array.isArray(p.locked)) p.locked[team.slot] = false;
+              }
+              console.log(`  Pronosticos del hueco ${team.slot + 1} reseteados (${cleared} tenian apuesta)`);
             }
 
             if (updated) {
