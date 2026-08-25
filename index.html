@@ -146,8 +146,13 @@
 
     /* ===== Eliminados: apagados con estilo, pero legibles ===== */
     .eliminated {
-      opacity: 0.62;
-      filter: grayscale(0.85) brightness(0.9);
+      opacity: 0.85;
+      filter: grayscale(0.6);
+    }
+    /* El nombre siempre a plena legibilidad, tambien en eliminados */
+    .participant-name {
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
     }
 
     .tap-btn {
@@ -1958,7 +1963,7 @@
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
-                          <h3 className="font-semibold text-sm text-slate-100 truncate">{p.name}</h3>
+                          <h3 className="participant-name font-bold text-base truncate">{p.name}</h3>
                           {p.status === 'eliminated' && (
                             <span className="shrink-0 text-[9px] font-display font-semibold uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-full px-2 py-0.5">
                               Eliminado P{p.eliminatedAt}
