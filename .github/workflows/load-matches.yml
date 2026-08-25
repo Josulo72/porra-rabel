@@ -1,0 +1,205 @@
+name: Auto Cargar Partidos
+
+on:
+  schedule:
+    # Martes, miercoles y jueves a las 05:00 UTC: carga la siguiente jornada
+    - cron: '0 5 * * 2,3,4'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Forzar recarga aunque los partidos actuales no hayan terminado'
+        required: false
+        default: 'false'
+
+jobs:
+  load-matches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Buscar y cargar proximos partidos
+        env:
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          node --experimental-fetch - <<'SCRIPT'
+
+          const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwIo68AUaC7Sd9eXKWGUWcCP6Be24j-9TmkHNEVKSmfOVIT5fQen3Kq5mqWlwLSyXq86w/exec';
+          const FORCE = process.env.FORCE === 'true';
+
+          // Dias validos para la porra (hora de Madrid): viernes, sabado, domingo, lunes
+          const VALID_DAYS = ['Fri', 'Sat', 'Sun', 'Mon'];
+
+          // Configuracion de los 3 equipos fijos de la porra
+          const TEAMS = [
+            { slot: 0, name: 'Real Madrid',     provider: 'espn',      espnTeamId: '86' },
+            { slot: 1, name: 'FC Barcelona',    provider: 'espn',      espnTeamId: '83' },
+            { slot: 2, name: 'SD Ponferradina', provider: 'sofascore', sofaTeamId: 6195 },
+          ];
+
+          const SOFA_HEADERS = {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Accept-Language': 'es-ES,es;q=0.9',
+            'Referer': 'https://www.sofascore.com/',
+            'Origin': 'https://www.sofascore.com',
+          };
+
+          function madridWeekday(date) {
+            return new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Madrid', weekday: 'short' }).format(date);
+          }
+
+          function madridLocalISO(date) {
+            const parts = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',
+              hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+            }).formatToParts(date).reduce((a, p) => (a[p.type] = p.value, a), {});
+            return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+          }
+
+          function normalize(s) {
+            return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+              .replace(/\bfc\b|\bcf\b|\bsd\b|\bcd\b|\bud\b|\bad\b|\breal\b/g, '')
+              .replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+          }
+
+          // Un hueco esta "gastado" si no tiene partido o si su kickoff paso hace mas de 6h
+          function slotStale(m) {
+            if (!m || !m.homeTeam || !m.awayTeam || !m.kickoff) return true;
+            const ko = new Date(m.kickoff);
+            if (isNaN(ko.getTime())) return true;
+            return (Date.now() - ko.getTime()) > 6 * 3600 * 1000;
+          }
+
+          async function nextEspnMatch(teamId) {
+            const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/teams/${teamId}/schedule`;
+            const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+            if (!res.ok) throw new Error(`ESPN HTTP ${res.status}`);
+            const data = await res.json();
+            const now = Date.now();
+            const future = (data.events || [])
+              .filter(ev => new Date(ev.date).getTime() > now - 2 * 3600 * 1000)
+              .sort((a, b) => new Date(a.date) - new Date(b.date));
+            for (const ev of future) {
+              const comp = ev.competitions && ev.competitions[0];
+              const hC = comp && comp.competitors && comp.competitors.find(c => c.homeAway === 'home');
+              const aC = comp && comp.competitors && comp.competitors.find(c => c.homeAway === 'away');
+              if (!hC || !aC) continue;
+              return {
+                date: new Date(ev.date),
+                homeTeam: hC.team.displayName || hC.team.name,
+                awayTeam: aC.team.displayName || aC.team.name,
+                providerId: String(ev.id || ''),
+                provider: 'espn',
+              };
+            }
+            return null;
+          }
+
+          async function nextSofaMatch(teamId) {
+            const url = `https://api.sofascore.com/api/v1/team/${teamId}/events/next/0`;
+            const res = await fetch(url, { headers: SOFA_HEADERS, signal: AbortSignal.timeout(10000) });
+            if (!res.ok) throw new Error(`Sofascore HTTP ${res.status}`);
+            const data = await res.json();
+            const now = Date.now();
+            const future = (data.events || [])
+              .filter(ev => ev.startTimestamp * 1000 > now - 2 * 3600 * 1000)
+              .sort((a, b) => a.startTimestamp - b.startTimestamp);
+            for (const ev of future) {
+              return {
+                date: new Date(ev.startTimestamp * 1000),
+                homeTeam: (ev.homeTeam && ev.homeTeam.name) || '',
+                awayTeam: (ev.awayTeam && ev.awayTeam.name) || '',
+                providerId: String(ev.id || ''),
+                provider: 'sofascore',
+              };
+            }
+            return null;
+          }
+
+          async function main() {
+            console.log('=== Carga automatica de partidos ===');
+            console.log('Hora UTC:', new Date().toISOString(), '| force:', FORCE);
+
+            const stateRes = await fetch(APPS_SCRIPT_URL + '?action=getState');
+            const stateData = await stateRes.json();
+            if (!stateData.ok || !stateData.state) { console.log('ERROR:', JSON.stringify(stateData)); process.exit(1); }
+            const state = stateData.state;
+            if (!Array.isArray(state.matches)) state.matches = [];
+
+            // 1. Buscar el proximo partido de cada equipo
+            const candidates = [];
+            for (const team of TEAMS) {
+              console.log(`\n--- ${team.name} ---`);
+              let cand = null;
+              try {
+                cand = team.provider === 'espn'
+                  ? await nextEspnMatch(team.espnTeamId)
+                  : await nextSofaMatch(team.sofaTeamId);
+              } catch (e) { console.log('  Error API:', e.message); }
+              if (!cand) { console.log('  Sin proximo partido en la API'); candidates.push(null); continue; }
+
+              const wd = madridWeekday(cand.date);
+              const local = madridLocalISO(cand.date);
+              console.log(`  Proximo: ${cand.homeTeam} vs ${cand.awayTeam} | ${local} (${wd})`);
+
+              if (!VALID_DAYS.includes(wd)) {
+                console.log(`  DESCARTADO: cae en ${wd}, no es viernes-lunes. Poner manual si se quiere.`);
+                candidates.push(null);
+                continue;
+              }
+              candidates.push(cand);
+            }
+
+            // 2. Detectar Clasico (Madrid vs Barca entre ellos): solo ocupa el hueco 1
+            const c0 = candidates[0];
+            const involves = (c, name) => !!c && (normalize(c.homeTeam).includes(name) || normalize(c.awayTeam).includes(name));
+            if (involves(c0, 'barcelona')) {
+              console.log('\nCLASICO detectado: Madrid y Barca juegan entre si. El hueco 2 queda para poner manual.');
+              candidates[1] = null;
+            }
+
+            // 3. Escribir cada hueco si procede
+            let updated = false;
+            for (const team of TEAMS) {
+              const cand = candidates[team.slot];
+              const slot = state.matches[team.slot];
+              if (!cand) continue;
+              if (!slot) continue;
+
+              const stale = slotStale(slot);
+              if (!stale && !FORCE) {
+                console.log(`\nHueco ${team.slot + 1} (${team.name}): partido vigente sin terminar, no se toca (usa force para sobrescribir).`);
+                continue;
+              }
+
+              const newKickoff = madridLocalISO(cand.date);
+              const same = slot.homeTeam === cand.homeTeam && slot.awayTeam === cand.awayTeam && slot.kickoff === newKickoff;
+              if (same) { console.log(`\nHueco ${team.slot + 1}: ya tiene este partido, sin cambios.`); continue; }
+
+              slot.homeTeam = cand.homeTeam;
+              slot.awayTeam = cand.awayTeam;
+              slot.kickoff = newKickoff;
+              slot.result = { home: null, away: null };
+              slot.source = cand.provider;
+              slot.providerId = cand.providerId;
+              slot.live = null;
+              slot.events = [];
+              slot.lastUpdated = new Date().toISOString();
+              updated = true;
+              console.log(`\nHueco ${team.slot + 1} ACTUALIZADO: ${cand.homeTeam} vs ${cand.awayTeam} | ${newKickoff}`);
+            }
+
+            if (updated) {
+              console.log('\nGuardando en Apps Script...');
+              const saveRes = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'setState', state }),
+              });
+              const saveData = await saveRes.json().catch(() => ({}));
+              console.log('Resultado guardado:', JSON.stringify(saveData));
+            } else {
+              console.log('\nSin cambios.');
+            }
+          }
+
+          main().catch(e => { console.error('Error fatal:', e.message || e); process.exit(1); });
+          SCRIPT

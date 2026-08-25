@@ -241,7 +241,25 @@
             away: toIntOrNull(src.result?.away),
           },
           flashscoreUrl: String(src.flashscoreUrl || ''),
-          source: src.source === 'scraping' ? 'scraping' : 'manual',
+          source: ['scraping', 'espn', 'sofascore'].includes(src.source) ? src.source : 'manual',
+          providerId: String(src.providerId || ''),
+          live: src.live && typeof src.live === 'object'
+            ? {
+                minute: String(src.live.minute || ''),
+                status: String(src.live.status || ''),
+                phase: String(src.live.phase || ''),
+              }
+            : null,
+          events: Array.isArray(src.events)
+            ? src.events
+                .filter((e) => e && typeof e === 'object')
+                .map((e) => ({
+                  minute: String(e.minute || ''),
+                  type: ['goal', 'yellow', 'red'].includes(e.type) ? e.type : 'goal',
+                  player: String(e.player || ''),
+                  side: e.side === 'away' ? 'away' : 'home',
+                }))
+            : [],
           lastUpdated: src.lastUpdated || null,
         };
       });
@@ -991,6 +1009,13 @@
           const match = state.matches[i];
           if (!respectWindow || isLiveWindow(match.kickoff)) {
             if (!match.homeTeam || !match.awayTeam) continue;
+            // El workflow del servidor (ESPN/Sofascore) tiene prioridad: si actualizó
+            // hace menos de 15 min, no pisar sus datos con TheSportsDB
+            if (
+              (match.source === 'espn' || match.source === 'sofascore') &&
+              match.lastUpdated &&
+              Date.now() - new Date(match.lastUpdated).getTime() < 15 * 60 * 1000
+            ) continue;
             attempts += 1;
             const result = await scrapeMatch(match, i);
             if (result?.ok) ok += 1;
@@ -1323,7 +1348,13 @@
                           </span>
                         </div>
                         {phase.level === 'active' && (
-                          <span className="text-[10px] text-lime-400 uppercase font-bold tracking-wider animate-pulse">EN VIVO</span>
+                          <span className="text-[10px] text-lime-400 uppercase font-bold tracking-wider animate-pulse">
+                            {match.live && /halftime|descanso/i.test(match.live.status || '')
+                              ? 'DESCANSO'
+                              : match.live && match.live.minute
+                                ? `EN VIVO · ${match.live.minute}′`
+                                : 'EN VIVO'}
+                          </span>
                         )}
                         {phase.level === 'ended' && isResultSet(match.result) && (
                           <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Final</span>
@@ -1344,6 +1375,27 @@
                         <span className="text-xs font-semibold text-center leading-tight max-w-[80px] team-name">{match.awayTeam || 'Visitante'}</span>
                       </div>
                     </div>
+
+                    {/* Goles y tarjetas */}
+                    {Array.isArray(match.events) && match.events.length > 0 && (
+                      <div className="mt-3 border-t border-slate-700/60 pt-2 grid grid-cols-2 gap-x-3 text-[11px]">
+                        <div className="space-y-0.5">
+                          {match.events.filter((e) => e.side === 'home').map((e, i) => (
+                            <p key={`h${i}`} className={e.type === 'goal' ? 'text-slate-200' : 'text-slate-400'}>
+                              {e.type === 'goal' ? '⚽' : e.type === 'red' ? '🟥' : '🟨'}
+                              {e.minute ? ` ${e.minute}′` : ''} {e.player}
+                            </p>
+                          ))}
+                        </div>
+                        <div className="space-y-0.5 text-right">
+                          {match.events.filter((e) => e.side === 'away').map((e, i) => (
+                            <p key={`a${i}`} className={e.type === 'goal' ? 'text-slate-200' : 'text-slate-400'}>
+                              {e.player}{e.minute ? ` ${e.minute}′` : ''} {e.type === 'goal' ? '⚽' : e.type === 'red' ? '🟥' : '🟨'}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Countdown */}
                     {(() => {

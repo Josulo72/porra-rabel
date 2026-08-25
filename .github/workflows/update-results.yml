@@ -2,7 +2,10 @@ name: Auto Update Match Results
 
 on:
   schedule:
-    - cron: '0,15,30,45 14-22 * * *'
+    # Viernes a lunes: cada 5 min en horario de partidos (10:00-23:59 UTC)
+    - cron: '*/5 10-23 * * 5,6,0,1'
+    # Martes a jueves: cada 30 min por si hay partidos puestos a mano (Copa, etc.)
+    - cron: '0,30 12-22 * * 2,3,4'
   workflow_dispatch:
     inputs:
       force:
@@ -27,6 +30,14 @@ jobs:
             'sd ponferradina': 6195,
           };
 
+          const SOFA_HEADERS = {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+            'Accept-Language': 'es-ES,es;q=0.9',
+            'Referer': 'https://www.sofascore.com/',
+            'Origin': 'https://www.sofascore.com',
+          };
+
           function normalize(s) {
             return (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
               .replace(/\bfc\b|\bcf\b|\bsd\b|\bcd\b|\bud\b|\bad\b|\breal\b|\batletico\b|\bathletic\b|\bdeportivo\b/g,'')
@@ -36,6 +47,27 @@ jobs:
           function levenshtein(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;const dp=Array.from({length:m+1},(_,i)=>Array.from({length:n+1},(_,j)=>i?j?0:j:i));for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);return dp[m][n];}
 
           function teamsMatch(n1,n2){const a=normalize(n1),b=normalize(n2);if(!a||!b)return false;if(a===b||a.includes(b)||b.includes(a))return true;if(a.length>3&&b.length>3&&levenshtein(a,b)<=3)return true;return false;}
+
+          // Extrae goles y tarjetas del scoreboard de ESPN
+          function extractEspnEvents(comp, hC) {
+            const homeId = String((hC.team && hC.team.id) || hC.id || '');
+            const out = [];
+            for (const d of (comp.details || [])) {
+              const t = ((d.type && d.type.text) || '').toLowerCase();
+              let type = null;
+              if (d.scoringPlay || t.includes('goal')) type = 'goal';
+              else if (t.includes('yellow')) type = 'yellow';
+              else if (t.includes('red')) type = 'red';
+              if (!type) continue;
+              out.push({
+                minute: ((d.clock && d.clock.displayValue) || '').replace(/'/g, ''),
+                type,
+                player: (d.athletesInvolved && d.athletesInvolved[0] && d.athletesInvolved[0].displayName) || '',
+                side: String((d.team && d.team.id) || '') === homeId ? 'home' : 'away',
+              });
+            }
+            return out;
+          }
 
           async function getFromESPN(homeTeam,awayTeam,dateStr){
             for(const league of ESPN_LEAGUES){
@@ -53,13 +85,36 @@ jobs:
                   if(teamsMatch(eH,homeTeam)&&teamsMatch(eA,awayTeam)){
                     const h=parseInt(hC.score,10),a=parseInt(aC.score,10);
                     const status=event.status?.type?.description||'';
-                    console.log(`  ESPN ${league}: ${eH} ${h}-${a} ${eA} [${status}]`);
-                    return{home:isNaN(h)?null:h,away:isNaN(a)?null:a,status,source:'espn'};
+                    const stType=event.status?.type?.state||'';
+                    const completed=event.status?.type?.completed===true;
+                    const clock=(event.status?.displayClock||'').replace(/'/g,'');
+                    const events=extractEspnEvents(comp,hC);
+                    console.log(`  ESPN ${league}: ${eH} ${h}-${a} ${eA} [${status}] ${clock} | ${events.length} eventos`);
+                    return{home:isNaN(h)?null:h,away:isNaN(a)?null:a,status,stType,completed,minute:stType==='in'?clock:'',events,source:'espn'};
                   }
                 }
               }catch(e){console.log(`  ESPN ${league}: ${e.message}`);}
             }
             return null;
+          }
+
+          // Goles y tarjetas de Sofascore (endpoint incidents)
+          async function sofaIncidents(eventId){
+            try{
+              const res=await fetch(`https://api.sofascore.com/api/v1/event/${eventId}/incidents`,{headers:SOFA_HEADERS,signal:AbortSignal.timeout(10000)});
+              if(!res.ok)return[];
+              const data=await res.json();
+              const out=[];
+              for(const inc of (data.incidents||[])){
+                if(inc.incidentType==='goal'){
+                  out.push({minute:String(inc.time??''),type:'goal',player:(inc.player&&(inc.player.shortName||inc.player.name))||'',side:inc.isHome?'home':'away'});
+                }else if(inc.incidentType==='card'){
+                  const cls=(inc.incidentClass||'').toLowerCase();
+                  out.push({minute:String(inc.time??''),type:(cls.includes('red')||cls==='yellowred')?'red':'yellow',player:(inc.player&&(inc.player.shortName||inc.player.name))||'',side:inc.isHome?'home':'away'});
+                }
+              }
+              return out.reverse();
+            }catch(e){console.log(`  Sofascore incidents: ${e.message}`);return[];}
           }
 
           async function getFromSofascore(homeTeam,awayTeam,dateStr){
@@ -71,10 +126,7 @@ jobs:
             const targetDate=dateStr.slice(0,4)+'-'+dateStr.slice(4,6)+'-'+dateStr.slice(6,8);
             for(const ep of ['next/0','last/0']){
               try{
-                const res=await fetch(`https://api.sofascore.com/api/v1/team/${teamId}/events/${ep}`,{
-                  headers:{'Accept':'application/json','User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36','Accept-Language':'es-ES,es;q=0.9','Referer':'https://www.sofascore.com/','Origin':'https://www.sofascore.com'},
-                  signal:AbortSignal.timeout(10000)
-                });
+                const res=await fetch(`https://api.sofascore.com/api/v1/team/${teamId}/events/${ep}`,{headers:SOFA_HEADERS,signal:AbortSignal.timeout(10000)});
                 if(!res.ok){console.log(`  Sofascore ${ep}: HTTP ${res.status}`);continue;}
                 const data=await res.json();
                 for(const evt of (data.events||[])){
@@ -85,9 +137,20 @@ jobs:
                   if(!teamsMatch(eH,homeTeam)||!teamsMatch(eA,awayTeam))continue;
                   const h=evt.homeScore?.current;
                   const a=evt.awayScore?.current;
-                  const status=evt.status?.description||evt.status?.type||'';
-                  console.log(`  Sofascore: ${eH} ${h}-${a} ${eA} [${status}]`);
-                  return{home:(h===null||h===undefined)?null:parseInt(h),away:(a===null||a===undefined)?null:parseInt(a),status,source:'sofascore'};
+                  const status=evt.status?.description||'';
+                  const stTypeRaw=evt.status?.type||'';
+                  const stType=stTypeRaw==='inprogress'?'in':(stTypeRaw==='finished'?'post':'pre');
+                  const completed=stTypeRaw==='finished';
+                  // Minuto aproximado a partir del inicio del periodo actual
+                  let minute='';
+                  if(stTypeRaw==='inprogress'&&evt.time&&evt.time.currentPeriodStartTimestamp){
+                    let m=Math.floor((Date.now()/1000-evt.time.currentPeriodStartTimestamp)/60)+1;
+                    if(/2nd|segunda/i.test(status))m+=45;
+                    minute=String(Math.max(1,Math.min(m,120)));
+                  }
+                  const events=await sofaIncidents(evt.id);
+                  console.log(`  Sofascore: ${eH} ${h}-${a} ${eA} [${status}] min ${minute} | ${events.length} eventos`);
+                  return{home:(h===null||h===undefined)?null:parseInt(h),away:(a===null||a===undefined)?null:parseInt(a),status,stType,completed,minute,events,source:'sofascore'};
                 }
               }catch(e){console.log(`  Sofascore ${ep}: ${e.message}`);}
             }
@@ -118,30 +181,40 @@ jobs:
             const now=new Date();
             for(const match of matches){
               console.log(`\n--- ${match.id}: ${match.homeTeam} vs ${match.awayTeam} ---`);
-              if((match.source==='espn'||match.source==='sofascore')&&match.result?.home!==null&&match.result?.away!==null){
-                console.log(`  Ya tiene resultado [${match.source}]: ${match.result.home}-${match.result.away}`);continue;
+              // Partido ya cerrado por el propio workflow: no volver a tocarlo
+              if(match.live&&match.live.phase==='post'&&match.result?.home!==null&&match.result?.away!==null){
+                console.log(`  Ya finalizado: ${match.result.home}-${match.result.away}`);continue;
               }
               if(!match.kickoff){console.log('  Sin kickoff');continue;}
               const kickoff=new Date(match.kickoff);
               const mins=(now-kickoff)/60000;
-              if(mins<5){console.log(`  Empieza en ${Math.round(-mins)} min`);continue;}
+              if(mins<-10){console.log(`  Empieza en ${Math.round(-mins)} min`);continue;}
               if(mins>480){console.log(`  Demasiado antiguo (${Math.round(mins)} min)`);continue;}
               console.log(`  Empezado hace ${Math.round(mins)} min`);
               const result=await getResult(match);
-              if(result){
-                const isFinished=/ended|final|full time|\bft\b|terminado|finished/i.test(result.status||'');
-                const likelyFinished=mins>105;
-                if(isFinished||likelyFinished){
-                  match.result={home:result.home,away:result.away};
-                  match.source=result.source;
-                  match.lastUpdated=new Date().toISOString();
-                  updated=true;
-                  console.log(`  ACTUALIZADO: ${result.home}-${result.away} [${result.status}] via ${result.source}`);
-                }else{
-                  console.log(`  En curso: ${result.home}-${result.away} [${result.status}]`);
-                }
+              if(!result){console.log('  Sin datos de ESPN ni Sofascore.');continue;}
+
+              const isFinished=result.completed||/ended|final|full time|\bft\b|terminado|finished/i.test(result.status||'')||(result.stType==='post');
+              const hasScore=result.home!==null&&result.away!==null;
+
+              if(hasScore){
+                match.result={home:result.home,away:result.away};
+              }
+              match.source=result.source;
+              match.live={
+                minute:isFinished?'':(result.minute||''),
+                status:result.status||'',
+                phase:isFinished?'post':(result.stType==='in'?'in':'pre'),
+              };
+              if(Array.isArray(result.events)&&result.events.length){
+                match.events=result.events;
+              }
+              match.lastUpdated=new Date().toISOString();
+              updated=true;
+              if(isFinished&&hasScore){
+                console.log(`  FINAL: ${result.home}-${result.away} [${result.status}] via ${result.source}`);
               }else{
-                console.log(`  Sin datos de ESPN ni Sofascore.`);
+                console.log(`  EN VIVO: ${result.home}-${result.away} min ${result.minute} [${result.status}] via ${result.source}`);
               }
             }
             if(updated){
