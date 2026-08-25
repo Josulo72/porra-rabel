@@ -1956,53 +1956,55 @@
                     key={p.id}
                     className={`rounded-2xl border px-3 py-2.5 relative bg-black/30 ${cardClass}`}
                   >
-                    <div className="flex items-center gap-2.5">
+                    {/* Linea 1: punto de estado + nombre completo + etiqueta */}
+                    <div className="flex items-center gap-2 min-w-0">
                       <span
                         className={`shrink-0 inline-block w-2.5 h-2.5 rounded-full ${lightClass}`}
                         title={lightTitle}
                       />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <h3 className="participant-name font-bold text-base truncate">{p.name}</h3>
-                          {p.status === 'eliminated' && (
-                            <span className="shrink-0 text-[9px] font-display font-semibold uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-full px-2 py-0.5">
-                              Eliminado P{p.eliminatedAt}
+                      <h3 className="participant-name font-bold text-base flex-1 min-w-0 break-words leading-tight">{p.name}</h3>
+                      {p.status === 'eliminated' && (
+                        <span className="shrink-0 text-[9px] font-display font-semibold uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-full px-2 py-0.5">
+                          Eliminado P{p.eliminatedAt}
+                        </span>
+                      )}
+                    </div>
+                    {/* Linea 2: chips de pronostico + accion (solo si aporta algo) */}
+                    <div className="flex items-center justify-between gap-2 mt-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {p.predictions.map((pr, i) => {
+                          const mr = state.matches[i]?.result;
+                          const hasResult = mr && Number.isInteger(mr.home) && Number.isInteger(mr.away);
+                          const hasPred = pr && Number.isInteger(pr.home) && Number.isInteger(pr.away);
+                          const hit = hasResult && hasPred && Number(pr.home) === mr.home && Number(pr.away) === mr.away;
+                          const miss = hasResult && (!hasPred || !hit);
+                          const chipClass = hit
+                            ? 'border-lime-400/60 bg-lime-400/10 text-lime-300'
+                            : miss
+                              ? 'border-rose-500/50 bg-rose-500/10 text-rose-300'
+                              : 'border-white/10 bg-white/[0.04] text-slate-300';
+                          return (
+                            <span key={i} className={`score-num text-[13px] rounded-lg px-2 py-1 text-center border leading-none ${chipClass}`}>
+                              {pr.home ?? '-'}-{pr.away ?? '-'}
+                              {hit && <span className="ml-1">✓</span>}
+                              {miss && <span className="ml-1">✗</span>}
                             </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1.5">
-                          {p.predictions.map((pr, i) => {
-                            const mr = state.matches[i]?.result;
-                            const hasResult = mr && Number.isInteger(mr.home) && Number.isInteger(mr.away);
-                            const hasPred = pr && Number.isInteger(pr.home) && Number.isInteger(pr.away);
-                            const hit = hasResult && hasPred && Number(pr.home) === mr.home && Number(pr.away) === mr.away;
-                            const miss = hasResult && (!hasPred || !hit);
-                            const chipClass = hit
-                              ? 'border-lime-400/60 bg-lime-400/10 text-lime-300'
-                              : miss
-                                ? 'border-rose-500/50 bg-rose-500/10 text-rose-300'
-                                : 'border-white/10 bg-white/[0.04] text-slate-300';
-                            return (
-                              <span key={i} className={`score-num text-[13px] rounded-lg px-2 py-1 text-center border leading-none ${chipClass}`}>
-                                {pr.home ?? '-'}-{pr.away ?? '-'}
-                                {hit && <span className="ml-1">✓</span>}
-                                {miss && <span className="ml-1">✗</span>}
-                              </span>
-                            );
-                          })}
-                        </div>
+                          );
+                        })}
                       </div>
-                      <button
-                        onClick={() => openEntryModalForParticipant(p)}
-                        disabled={state.matches.every((m) => isMatchLocked(m)) || (p.locked && p.locked.every(Boolean))}
-                        className={`tap-btn shrink-0 w-[96px] rounded-xl px-2 py-2 text-[11px] font-bold leading-tight text-center ${
-                          canBet
-                            ? 'bg-lime-400 hover:bg-lime-300 text-slate-950 shadow-[0_6px_18px_-6px_rgba(163,230,53,0.7)]'
-                            : 'bg-white/[0.06] border border-white/10 text-slate-300'
-                        } disabled:opacity-60`}
-                      >
-                        {(p.locked && p.locked.every(Boolean)) ? 'Pronóstico enviado ✓' : state.matches.every((m) => isMatchLocked(m)) ? 'Edición cerrada' : 'Poner resultado'}
-                      </button>
+                      {p.status !== 'eliminated' && (canBet ? (
+                        <button
+                          onClick={() => openEntryModalForParticipant(p)}
+                          disabled={state.matches.every((m) => isMatchLocked(m)) || (p.locked && p.locked.every(Boolean))}
+                          className="tap-btn shrink-0 rounded-xl px-3 py-2 text-[11px] font-bold leading-tight text-center bg-lime-400 hover:bg-lime-300 text-slate-950 shadow-[0_6px_18px_-6px_rgba(163,230,53,0.7)] disabled:opacity-60"
+                        >
+                          Poner resultado
+                        </button>
+                      ) : (
+                        <span className="shrink-0 text-[10px] font-semibold text-slate-400 text-right leading-tight">
+                          {allSent ? 'Enviado ✓' : 'Cerrada'}
+                        </span>
+                      ))}
                     </div>
                     {adminOpen && adminLogged && (
                       <button
