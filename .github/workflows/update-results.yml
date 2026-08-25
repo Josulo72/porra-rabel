@@ -89,8 +89,9 @@ jobs:
                     const completed=event.status?.type?.completed===true;
                     const clock=(event.status?.displayClock||'').replace(/'/g,'');
                     const events=extractEspnEvents(comp,hC);
+                    const espnLogo=(c)=>c.team?.logo||(c.team?.id?`https://a.espncdn.com/i/teamlogos/soccer/500/${c.team.id}.png`:'');
                     console.log(`  ESPN ${league}: ${eH} ${h}-${a} ${eA} [${status}] ${clock} | ${events.length} eventos`);
-                    return{home:isNaN(h)?null:h,away:isNaN(a)?null:a,status,stType,completed,minute:stType==='in'?clock:'',events,source:'espn'};
+                    return{home:isNaN(h)?null:h,away:isNaN(a)?null:a,status,stType,completed,minute:stType==='in'?clock:'',events,homeLogo:espnLogo(hC),awayLogo:espnLogo(aC),source:'espn'};
                   }
                 }
               }catch(e){console.log(`  ESPN ${league}: ${e.message}`);}
@@ -149,8 +150,9 @@ jobs:
                     minute=String(Math.max(1,Math.min(m,120)));
                   }
                   const events=await sofaIncidents(evt.id);
+                  const sofaLogo=(t)=>(t&&t.id)?`https://api.sofascore.com/api/v1/team/${t.id}/image`:'';
                   console.log(`  Sofascore: ${eH} ${h}-${a} ${eA} [${status}] min ${minute} | ${events.length} eventos`);
-                  return{home:(h===null||h===undefined)?null:parseInt(h),away:(a===null||a===undefined)?null:parseInt(a),status,stType,completed,minute,events,source:'sofascore'};
+                  return{home:(h===null||h===undefined)?null:parseInt(h),away:(a===null||a===undefined)?null:parseInt(a),status,stType,completed,minute,events,homeLogo:sofaLogo(evt.homeTeam),awayLogo:sofaLogo(evt.awayTeam),source:'sofascore'};
                 }
               }catch(e){console.log(`  Sofascore ${ep}: ${e.message}`);}
             }
@@ -200,6 +202,8 @@ jobs:
               if(hasScore){
                 match.result={home:result.home,away:result.away};
               }
+              if(!match.homeLogo&&result.homeLogo)match.homeLogo=result.homeLogo;
+              if(!match.awayLogo&&result.awayLogo)match.awayLogo=result.awayLogo;
               match.source=result.source;
               match.live={
                 minute:isFinished?'':(result.minute||''),

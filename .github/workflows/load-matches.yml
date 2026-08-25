@@ -82,10 +82,18 @@ jobs:
               const hC = comp && comp.competitors && comp.competitors.find(c => c.homeAway === 'home');
               const aC = comp && comp.competitors && comp.competitors.find(c => c.homeAway === 'away');
               if (!hC || !aC) continue;
+              const espnLogo = (c) => {
+                const href = c.team && c.team.logos && c.team.logos[0] && c.team.logos[0].href;
+                if (href) return href;
+                const id = c.team && c.team.id;
+                return id ? `https://a.espncdn.com/i/teamlogos/soccer/500/${id}.png` : '';
+              };
               return {
                 date: new Date(ev.date),
                 homeTeam: hC.team.displayName || hC.team.name,
                 awayTeam: aC.team.displayName || aC.team.name,
+                homeLogo: espnLogo(hC),
+                awayLogo: espnLogo(aC),
                 providerId: String(ev.id || ''),
                 provider: 'espn',
               };
@@ -103,10 +111,13 @@ jobs:
               .filter(ev => ev.startTimestamp * 1000 > now - 2 * 3600 * 1000)
               .sort((a, b) => a.startTimestamp - b.startTimestamp);
             for (const ev of future) {
+              const sofaLogo = (t) => (t && t.id) ? `https://api.sofascore.com/api/v1/team/${t.id}/image` : '';
               return {
                 date: new Date(ev.startTimestamp * 1000),
                 homeTeam: (ev.homeTeam && ev.homeTeam.name) || '',
                 awayTeam: (ev.awayTeam && ev.awayTeam.name) || '',
+                homeLogo: sofaLogo(ev.homeTeam),
+                awayLogo: sofaLogo(ev.awayTeam),
                 providerId: String(ev.id || ''),
                 provider: 'sofascore',
               };
@@ -176,6 +187,8 @@ jobs:
 
               slot.homeTeam = cand.homeTeam;
               slot.awayTeam = cand.awayTeam;
+              slot.homeLogo = cand.homeLogo || '';
+              slot.awayLogo = cand.awayLogo || '';
               slot.kickoff = newKickoff;
               slot.result = { home: null, away: null };
               slot.source = cand.provider;

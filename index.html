@@ -243,6 +243,8 @@
           flashscoreUrl: String(src.flashscoreUrl || ''),
           source: ['scraping', 'espn', 'sofascore'].includes(src.source) ? src.source : 'manual',
           providerId: String(src.providerId || ''),
+          homeLogo: String(src.homeLogo || ''),
+          awayLogo: String(src.awayLogo || ''),
           live: src.live && typeof src.live === 'object'
             ? {
                 minute: String(src.live.minute || ''),
@@ -951,8 +953,9 @@
 
       useEffect(() => {
         state.matches.forEach((m) => {
-          if (m.homeTeam) fetchTeamLogo(m.homeTeam);
-          if (m.awayTeam) fetchTeamLogo(m.awayTeam);
+          // Si el partido ya trae logo oficial de la API, no buscar en Wikipedia
+          if (m.homeTeam && !m.homeLogo) fetchTeamLogo(m.homeTeam);
+          if (m.awayTeam && !m.awayLogo) fetchTeamLogo(m.awayTeam);
         });
       }, [state.matches]);
 
@@ -1267,8 +1270,8 @@
 
           <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {state.matches.map((match, idx) => {
-              const homeLogo = getTeamLogo(match.homeTeam);
-              const awayLogo = getTeamLogo(match.awayTeam);
+              const homeLogo = match.homeLogo || getTeamLogo(match.homeTeam);
+              const awayLogo = match.awayLogo || getTeamLogo(match.awayTeam);
               const homeFlash = flashMap[`${match.id}-home`];
               const awayFlash = flashMap[`${match.id}-away`];
               const phase = getMatchPhase(match);
