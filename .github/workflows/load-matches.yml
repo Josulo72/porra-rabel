@@ -74,12 +74,20 @@ jobs:
           }
 
           async function nextEspnMatch(teamId) {
-            const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/teams/${teamId}/schedule`;
-            const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-            if (!res.ok) throw new Error(`ESPN HTTP ${res.status}`);
-            const data = await res.json();
+            // fixture=true devuelve los partidos POR JUGAR; sin el, ESPN solo da los jugados
+            const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/teams/${teamId}/schedule`;
+            let events = [];
+            for (const url of [base + '?fixture=true', base]) {
+              try {
+                const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+                if (!res.ok) continue;
+                const data = await res.json();
+                events = events.concat(data.events || []);
+              } catch (e) { console.log('  ESPN:', e.message); }
+            }
+            if (!events.length) throw new Error('ESPN sin eventos');
             const now = Date.now();
-            const future = (data.events || [])
+            const future = events
               .filter(ev => new Date(ev.date).getTime() > now - 2 * 3600 * 1000)
               .sort((a, b) => new Date(a.date) - new Date(b.date));
             for (const ev of future) {
@@ -107,10 +115,18 @@ jobs:
           }
 
           async function nextSofaMatch(teamId) {
-            const url = `https://api.sofascore.com/api/v1/team/${teamId}/events/next/0`;
-            const res = await fetch(url, { headers: SOFA_HEADERS, signal: AbortSignal.timeout(10000) });
-            if (!res.ok) throw new Error(`Sofascore HTTP ${res.status}`);
-            const data = await res.json();
+            // Sofascore a veces bloquea las IPs de GitHub (403): probar dos hosts
+            const hosts = ['https://api.sofascore.com', 'https://www.sofascore.com'];
+            let data = null, lastErr = '';
+            for (const h of hosts) {
+              try {
+                const res = await fetch(`${h}/api/v1/team/${teamId}/events/next/0`, { headers: SOFA_HEADERS, signal: AbortSignal.timeout(10000) });
+                if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
+                data = await res.json();
+                break;
+              } catch (e) { lastErr = e.message; }
+            }
+            if (!data) throw new Error(`Sofascore ${lastErr}`);
             const now = Date.now();
             const future = (data.events || [])
               .filter(ev => ev.startTimestamp * 1000 > now - 2 * 3600 * 1000)
@@ -124,6 +140,38 @@ jobs:
                 homeLogo: sofaLogo(ev.homeTeam),
                 awayLogo: sofaLogo(ev.awayTeam),
                 providerId: String(ev.id || ''),
+                provider: 'sofascore',
+              };
+            }
+            return null;
+          }
+
+          // Plan B para la Ponfe: TheSportsDB (no bloquea IPs de servidores)
+          async function nextTsdbMatch(teamName) {
+            const sRes = await fetch('https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=' + encodeURIComponent(teamName), { signal: AbortSignal.timeout(10000) });
+            if (!sRes.ok) throw new Error(`TheSportsDB HTTP ${sRes.status}`);
+            const sData = await sRes.json();
+            const team = (sData.teams || []).find(t => normalize(t.strTeam) === normalize(teamName) || normalize(t.strTeam).includes(normalize(teamName)));
+            if (!team) return null;
+            const nRes = await fetch('https://www.thesportsdb.com/api/v1/json/3/eventsnext.php?id=' + team.idTeam, { signal: AbortSignal.timeout(10000) });
+            if (!nRes.ok) throw new Error(`TheSportsDB HTTP ${nRes.status}`);
+            const nData = await nRes.json();
+            const now = Date.now();
+            const events = (nData.events || [])
+              .map(ev => {
+                const ts = ev.strTimestamp ? new Date(ev.strTimestamp) : new Date(`${ev.dateEvent}T${ev.strTime || '12:00:00'}Z`);
+                return { ev, date: ts };
+              })
+              .filter(x => !isNaN(x.date.getTime()) && x.date.getTime() > now - 2 * 3600 * 1000)
+              .sort((a, b) => a.date - b.date);
+            for (const { ev, date } of events) {
+              return {
+                date,
+                homeTeam: ev.strHomeTeam || '',
+                awayTeam: ev.strAwayTeam || '',
+                homeLogo: ev.strHomeTeamBadge || (normalize(ev.strHomeTeam) === normalize(team.strTeam) ? (team.strBadge || '') : ''),
+                awayLogo: ev.strAwayTeamBadge || (normalize(ev.strAwayTeam) === normalize(team.strTeam) ? (team.strBadge || '') : ''),
+                providerId: String(ev.idEvent || ''),
                 provider: 'sofascore',
               };
             }
@@ -150,6 +198,12 @@ jobs:
                   ? await nextEspnMatch(team.espnTeamId)
                   : await nextSofaMatch(team.sofaTeamId);
               } catch (e) { console.log('  Error API:', e.message); }
+              if (!cand && team.provider === 'sofascore') {
+                try {
+                  cand = await nextTsdbMatch(team.name);
+                  if (cand) console.log('  (via TheSportsDB, plan B)');
+                } catch (e) { console.log('  Error TheSportsDB:', e.message); }
+              }
               if (!cand) { console.log('  Sin proximo partido en la API'); candidates.push(null); continue; }
 
               const wd = madridWeekday(cand.date);

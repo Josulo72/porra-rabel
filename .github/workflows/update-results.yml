@@ -127,8 +127,14 @@ jobs:
             const targetDate=dateStr.slice(0,4)+'-'+dateStr.slice(4,6)+'-'+dateStr.slice(6,8);
             for(const ep of ['next/0','last/0']){
               try{
-                const res=await fetch(`https://api.sofascore.com/api/v1/team/${teamId}/events/${ep}`,{headers:SOFA_HEADERS,signal:AbortSignal.timeout(10000)});
-                if(!res.ok){console.log(`  Sofascore ${ep}: HTTP ${res.status}`);continue;}
+                let res=null;
+                for(const h of ['https://api.sofascore.com','https://www.sofascore.com']){
+                  try{
+                    res=await fetch(`${h}/api/v1/team/${teamId}/events/${ep}`,{headers:SOFA_HEADERS,signal:AbortSignal.timeout(10000)});
+                    if(res.ok)break;
+                  }catch(e){res=null;}
+                }
+                if(!res||!res.ok){console.log(`  Sofascore ${ep}: HTTP ${res?res.status:'sin respuesta'}`);continue;}
                 const data=await res.json();
                 for(const evt of (data.events||[])){
                   const evtDate=new Date(evt.startTimestamp*1000).toISOString().slice(0,10);
@@ -159,6 +165,34 @@ jobs:
             return null;
           }
 
+          // Plan B: TheSportsDB (marcador y estado; sin minuto ni goleadores)
+          async function getFromTSDB(homeTeam,awayTeam,dateStr){
+            try{
+              const targetDate=dateStr.slice(0,4)+'-'+dateStr.slice(4,6)+'-'+dateStr.slice(6,8);
+              const sRes=await fetch('https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t='+encodeURIComponent(homeTeam),{signal:AbortSignal.timeout(10000)});
+              if(!sRes.ok)return null;
+              const sData=await sRes.json();
+              const team=(sData.teams||[]).find(t=>teamsMatch(t.strTeam,homeTeam));
+              if(!team)return null;
+              for(const ep of ['eventsnext','eventslast']){
+                const eRes=await fetch(`https://www.thesportsdb.com/api/v1/json/3/${ep}.php?id=${team.idTeam}`,{signal:AbortSignal.timeout(10000)});
+                if(!eRes.ok)continue;
+                const eData=await eRes.json();
+                for(const ev of (eData.events||eData.results||[])){
+                  if(ev.dateEvent!==targetDate)continue;
+                  if(!teamsMatch(ev.strHomeTeam,homeTeam)||!teamsMatch(ev.strAwayTeam,awayTeam))continue;
+                  const h=parseInt(ev.intHomeScore,10),a=parseInt(ev.intAwayScore,10);
+                  if(isNaN(h)||isNaN(a))continue;
+                  const status=ev.strStatus||'';
+                  const finished=/ft|finished|match finished|aet|pen/i.test(status);
+                  console.log(`  TheSportsDB: ${ev.strHomeTeam} ${h}-${a} ${ev.strAwayTeam} [${status}]`);
+                  return{home:h,away:a,status,stType:finished?'post':'in',completed:finished,minute:'',events:[],source:'sofascore'};
+                }
+              }
+            }catch(e){console.log(`  TheSportsDB: ${e.message}`);}
+            return null;
+          }
+
           async function getResult(match){
             const kickoffDate=new Date(match.kickoff);
             const dateStr=kickoffDate.toISOString().slice(0,10).replace(/-/g,'');
@@ -167,6 +201,8 @@ jobs:
             if(espnResult)return espnResult;
             const sofaResult=await getFromSofascore(match.homeTeam,match.awayTeam,dateStr);
             if(sofaResult)return sofaResult;
+            const tsdbResult=await getFromTSDB(match.homeTeam,match.awayTeam,dateStr);
+            if(tsdbResult)return tsdbResult;
             return null;
           }
 
