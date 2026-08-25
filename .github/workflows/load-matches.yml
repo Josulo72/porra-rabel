@@ -2,7 +2,10 @@ name: Auto Cargar Partidos
 
 on:
   schedule:
-    # Martes, miercoles y jueves a las 05:00 UTC: carga la siguiente jornada
+    # Noche del lunes (01:45 hora espanola): carga la siguiente jornada
+    # en cuanto termina el ultimo partido de la anterior
+    - cron: '45 23 * * 1'
+    # Reintentos martes, miercoles y jueves a las 07:00 hora espanola
     - cron: '0 5 * * 2,3,4'
   workflow_dispatch:
     inputs:
@@ -60,12 +63,14 @@ jobs:
               .replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
           }
 
-          // Un hueco esta "gastado" si no tiene partido o si su kickoff paso hace mas de 6h
+          // Un hueco esta "gastado" si no tiene partido o si su kickoff paso hace mas
+          // de 4.5h (mas que la ventana de 250 min de partido en vivo). Asi un partido
+          // del lunes a las 21:00 ya cuenta como terminado en la carga de la 01:45.
           function slotStale(m) {
             if (!m || !m.homeTeam || !m.awayTeam || !m.kickoff) return true;
             const ko = new Date(m.kickoff);
             if (isNaN(ko.getTime())) return true;
-            return (Date.now() - ko.getTime()) > 6 * 3600 * 1000;
+            return (Date.now() - ko.getTime()) > 4.5 * 3600 * 1000;
           }
 
           async function nextEspnMatch(teamId) {
