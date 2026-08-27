@@ -1,6 +1,10 @@
 name: Auto Cargar Partidos
 
 on:
+  # Ejecutar tambien al modificar este workflow (carga inmediata tras un cambio)
+  push:
+    branches: [main]
+    paths: ['.github/workflows/load-matches.yml']
   schedule:
     # Noche del lunes (01:45 hora espanola): carga la siguiente jornada
     # en cuanto termina el ultimo partido de la anterior
@@ -92,6 +96,14 @@ jobs:
               .filter(ev => new Date(ev.date).getTime() > now - 2 * 3600 * 1000)
               .sort((a, b) => new Date(a.date) - new Date(b.date));
             for (const ev of future) {
+              // Saltar partidos entre semana: buscar el primero que caiga
+              // viernes-lunes dentro de los proximos 10 dias
+              const evDate = new Date(ev.date);
+              if (evDate.getTime() > now + 10 * 86400e3) break;
+              if (!VALID_DAYS.includes(madridWeekday(evDate))) {
+                console.log(`  (saltado ${madridLocalISO(evDate)} ${madridWeekday(evDate)}: entre semana)`);
+                continue;
+              }
               const comp = ev.competitions && ev.competitions[0];
               const hC = comp && comp.competitors && comp.competitors.find(c => c.homeAway === 'home');
               const aC = comp && comp.competitors && comp.competitors.find(c => c.homeAway === 'away');
@@ -133,6 +145,12 @@ jobs:
               .filter(ev => ev.startTimestamp * 1000 > now - 2 * 3600 * 1000)
               .sort((a, b) => a.startTimestamp - b.startTimestamp);
             for (const ev of future) {
+              const evDate = new Date(ev.startTimestamp * 1000);
+              if (evDate.getTime() > now + 10 * 86400e3) break;
+              if (!VALID_DAYS.includes(madridWeekday(evDate))) {
+                console.log(`  (saltado ${madridLocalISO(evDate)} ${madridWeekday(evDate)}: entre semana)`);
+                continue;
+              }
               const sofaLogo = (t) => (t && t.id) ? `https://api.sofascore.com/api/v1/team/${t.id}/image` : '';
               return {
                 date: new Date(ev.startTimestamp * 1000),
@@ -166,6 +184,11 @@ jobs:
               .filter(x => !isNaN(x.date.getTime()) && x.date.getTime() > now - 2 * 3600 * 1000)
               .sort((a, b) => a.date - b.date);
             for (const { ev, date } of events) {
+              if (date.getTime() > now + 10 * 86400e3) break;
+              if (!VALID_DAYS.includes(madridWeekday(date))) {
+                console.log(`  (saltado ${madridLocalISO(date)} ${madridWeekday(date)}: entre semana)`);
+                continue;
+              }
               return {
                 date,
                 homeTeam: ev.strHomeTeam || '',
