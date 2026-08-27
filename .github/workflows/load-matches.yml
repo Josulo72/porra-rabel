@@ -5,8 +5,9 @@ on:
     # Noche del lunes (01:45 hora espanola): carga la siguiente jornada
     # en cuanto termina el ultimo partido de la anterior
     - cron: '45 23 * * 1'
-    # Reintentos martes, miercoles y jueves a las 07:00 hora espanola
-    - cron: '0 5 * * 2,3,4'
+    # Reintentos de martes a viernes a las 07:00 hora espanola
+    # (el viernes recoge el hueco de equipos que jugaron entre semana)
+    - cron: '0 5 * * 2,3,4,5'
   workflow_dispatch:
     inputs:
       force:
