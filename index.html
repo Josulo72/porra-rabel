@@ -208,6 +208,17 @@
     const REMOTE_SYNC_MS = 3000;
     const REMOTE_POLL_MS = 30000; // Polling para ver cambios de otros usuarios
 
+    // Fallback UUID para iOS < 15.4 y contextos no seguros donde crypto.randomUUID no existe
+    const genId = () => {
+      try {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+          return crypto.randomUUID();
+        }
+      } catch (e) { /* noop */ }
+      const rnd = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
+      return `${rnd()}${rnd()}-${rnd()}-${rnd()}-${rnd()}-${rnd()}${rnd()}${rnd()}`;
+    };
+
     const DEFAULT_MATCHES = [
       { id: 'm1', order: 1, homeTeam: 'Real Madrid', awayTeam: '', kickoff: '' },
       { id: 'm2', order: 2, homeTeam: 'FC Barcelona', awayTeam: '', kickoff: '' },
@@ -236,7 +247,7 @@
     };
 
     const defaultParticipants = Array.from({ length: 26 }).map((_, i) => ({
-      id: crypto.randomUUID(),
+      id: genId(),
       name: `Jugador ${String(i + 1).padStart(2, '0')}`,
       predictions: [null, null, null],
       locked: [false, false, false],
@@ -306,7 +317,7 @@
       const name = keys.nombre || keys.name || keys.usuario || keys.player || keys.participante;
       if (!name) return null;
       return {
-        id: crypto.randomUUID(),
+        id: genId(),
         name: String(name).trim(),
         predictions: [
           { home: toIntOrNull(keys.p1_local ?? keys.m1_local ?? keys.rm_goles), away: toIntOrNull(keys.p1_visitante ?? keys.m1_visitante ?? keys.rival1_goles) },
@@ -325,7 +336,7 @@
 
       const preds = matchHeaders.slice(0, 3).map((h) => parseScoreCell(row[h]));
       return {
-        id: crypto.randomUUID(),
+        id: genId(),
         name: String(name).trim(),
         predictions: [
           preds[0] || { home: null, away: null },
@@ -380,7 +391,7 @@
       });
 
       const participants = participantsSource.map((p) => ({
-        id: p.id || crypto.randomUUID(),
+        id: p.id || genId(),
         name: String(p.name || '').trim(),
         predictions: [0, 1, 2].map((idx) => ({
           home: toIntOrNull(p.predictions?.[idx]?.home),
@@ -856,7 +867,7 @@
             return;
           }
           savedParticipant = {
-            id: crypto.randomUUID(),
+            id: genId(),
             name: cleanName,
             predictions: parsed,
             locked: [true, true, true],
