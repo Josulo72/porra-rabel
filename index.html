@@ -1080,6 +1080,16 @@
         return now >= start && now <= end;
       };
 
+      // Un partido está terminado si la fuente de datos lo dice (phase 'post'), o
+      // si ya hay resultado y han pasado 140 min del kickoff (90' + descanso + añadido).
+      // Sin esto la tarjeta se quedaba "activa" 4h10 aunque el partido hubiera acabado.
+      const isMatchFinished = (match) => {
+        if (match.live && match.live.phase === 'post') return true;
+        if (!match.kickoff) return false;
+        const elapsed = Date.now() - new Date(match.kickoff).getTime();
+        return isResultSet(match.result) && elapsed > 140 * 60 * 1000;
+      };
+
       const isMatchLocked = (match) => {
         if (!match.kickoff) return false;
         return new Date() >= new Date(match.kickoff);
@@ -1091,8 +1101,20 @@
         const ko = new Date(match.kickoff);
         const start = new Date(ko.getTime() - 30 * 60 * 1000);
         const end = new Date(ko.getTime() + 250 * 60 * 1000);
+        // La fuente de datos manda sobre el reloj: si el partido está finalizado,
+        // la tarjeta no puede seguir en "activo" aunque estemos dentro de la ventana.
+        if (isMatchFinished(match)) {
+          return isResultSet(match.result)
+            ? { level: 'ended', text: 'Partido terminado ✓' }
+            : { level: 'ended', text: 'Partido terminado — pendiente resultado' };
+        }
         if (now < start) return { level: 'waiting', text: 'Esperando partido' };
-        if (now >= start && now <= end) return { level: 'active', text: 'Partido activo' };
+        // Sin datos en vivo solo damos por activo lo que dura un partido normal
+        // (150 min). La ventana larga de 250 min (prórroga/penaltis) solo se
+        // mantiene si la fuente confirma que el partido sigue en juego.
+        const stillLive = match.live && match.live.phase === 'in';
+        const activeEnd = stillLive ? end : new Date(ko.getTime() + 150 * 60 * 1000);
+        if (now >= start && now <= activeEnd) return { level: 'active', text: 'Partido activo' };
         if (isResultSet(match.result)) return { level: 'ended', text: 'Partido terminado ✓' };
         return { level: 'ended', text: 'Partido terminado — pendiente resultado' };
       };
@@ -1369,6 +1391,7 @@
         let fail = 0;
         for (let i = 0; i < state.matches.length; i++) {
           const match = state.matches[i];
+          if (respectWindow && isMatchFinished(match)) continue; // ya finalizado: no seguir pidiendo
           if (!respectWindow || isLiveWindow(match.kickoff)) {
             if (!match.homeTeam || !match.awayTeam) continue;
             // El workflow del servidor (ESPN/Sofascore) tiene prioridad: si actualizó
@@ -1391,8 +1414,8 @@
 
         // Auto-desactivar si todos los partidos con kickoff ya pasaron su ventana
         const allMatchesWithKickoff = state.matches.filter((m) => m.kickoff);
-        if (allMatchesWithKickoff.length > 0 && allMatchesWithKickoff.every((m) => !isLiveWindow(m.kickoff))) {
-          const allEnded = allMatchesWithKickoff.every((m) => new Date() > new Date(new Date(m.kickoff).getTime() + 250 * 60 * 1000));
+        if (allMatchesWithKickoff.length > 0 && allMatchesWithKickoff.every((m) => isMatchFinished(m) || !isLiveWindow(m.kickoff))) {
+          const allEnded = allMatchesWithKickoff.every((m) => isMatchFinished(m) || new Date() > new Date(new Date(m.kickoff).getTime() + 250 * 60 * 1000));
           if (allEnded) {
             setScrapingEnabled(false);
             setScrapeStatus({ level: 'off', text: 'Scraping detenido: todos los partidos han terminado' });

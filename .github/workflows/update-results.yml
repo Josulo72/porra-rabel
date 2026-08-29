@@ -13,9 +13,14 @@ on:
         required: false
         default: 'false'
 
+concurrency:
+  group: update-results
+  cancel-in-progress: true
+
 jobs:
   update-results:
     runs-on: ubuntu-latest
+    timeout-minutes: 70
     steps:
       - name: Fetch and update match results
         run: |
@@ -37,6 +42,27 @@ jobs:
             'Referer': 'https://www.sofascore.com/',
             'Origin': 'https://www.sofascore.com',
           };
+
+          // El kickoff se guarda sin zona ('2026-08-29T17:00') y la app lo interpreta
+          // en hora de Madrid. Node lo leia como UTC y creia que el partido empezaba
+          // 1-2h mas tarde, saltandoselo. Aqui lo convertimos a la zona correcta.
+          function madridOffsetMs(d){
+            try{
+              const part=new Intl.DateTimeFormat('en-US',{timeZone:'Europe/Madrid',timeZoneName:'longOffset'})
+                .formatToParts(d).find(p=>p.type==='timeZoneName');
+              const m=(part&&part.value||'').match(/GMT([+-])(\d{2}):(\d{2})/);
+              if(!m)return 0;
+              return (m[1]==='-'?-1:1)*(Number(m[2])*3600000+Number(m[3])*60000);
+            }catch(e){return 0;}
+          }
+          function parseKickoff(s){
+            if(!s)return null;
+            if(/(Z|[+-]\d{2}:?\d{2})$/.test(s))return new Date(s);
+            const m=String(s).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+            if(!m)return new Date(s);
+            const asUtc=Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5]);
+            return new Date(asUtc-madridOffsetMs(new Date(asUtc)));
+          }
 
           function normalize(s) {
             return (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
@@ -194,8 +220,11 @@ jobs:
           }
 
           async function getResult(match){
-            const kickoffDate=new Date(match.kickoff);
-            const dateStr=kickoffDate.toISOString().slice(0,10).replace(/-/g,'');
+            const kickoffDate=parseKickoff(match.kickoff);
+            // Fecha del partido en hora local espanola, no en UTC (un 21:30 CEST
+            // cae en el dia anterior si se calcula sobre el UTC del kickoff).
+            const dateStr=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'})
+              .format(kickoffDate).replace(/-/g,'');
             console.log(`  Buscando: ${match.homeTeam} vs ${match.awayTeam}`);
             const espnResult=await getFromESPN(match.homeTeam,match.awayTeam,dateStr);
             if(espnResult)return espnResult;
@@ -224,10 +253,10 @@ jobs:
                 console.log(`  Ya finalizado: ${match.result.home}-${match.result.away}`);continue;
               }
               if(!match.kickoff){console.log('  Sin kickoff');continue;}
-              const kickoff=new Date(match.kickoff);
+              const kickoff=parseKickoff(match.kickoff);
               const mins=(now-kickoff)/60000;
               if(mins<-10){console.log(`  Empieza en ${Math.round(-mins)} min`);continue;}
-              if(mins>480){console.log(`  Demasiado antiguo (${Math.round(mins)} min)`);continue;}
+              if(mins>1440){console.log(`  Demasiado antiguo (${Math.round(mins)} min)`);continue;}
               console.log(`  Empezado hace ${Math.round(mins)} min`);
               const result=await getResult(match);
               if(!result){console.log('  Sin datos de ESPN ni Sofascore.');continue;}
@@ -265,7 +294,32 @@ jobs:
             }else{
               console.log('\nSin actualizaciones.');
             }
+            // Partidos que siguen en juego (o a punto de empezar): si hay alguno,
+            // merece la pena seguir sondeando dentro de esta misma ejecucion.
+            return matches.filter(m=>{
+              if(!m.kickoff)return false;
+              if(m.live&&m.live.phase==='post'&&m.result&&m.result.home!==null&&m.result.away!==null)return false;
+              const mm=(Date.now()-parseKickoff(m.kickoff))/60000;
+              return mm>-60&&mm<300;
+            }).length;
           }
 
-          main().catch(e=>{console.error('Error fatal:',e.message||e);process.exit(1);});
+          // GitHub ignora la mayoria de ejecuciones de un cron '*/5' (en la practica
+          // salta ~1 cada 6-12h). Por eso cada ejecucion sondea durante ~55 min en
+          // vez de una sola vez: asi cubre el hueco entre lanzamientos.
+          const LOOP_MS=3*60*1000;
+          const DEADLINE=Date.now()+55*60*1000;
+          async function loop(){
+            while(true){
+              let pending=0;
+              try{ pending=await main(); }
+              catch(e){ console.error('Error en ciclo:',e.message||e); }
+              if(!pending){ console.log('\nNada en juego: fin de la ejecucion.'); return; }
+              if(Date.now()+LOOP_MS>DEADLINE){ console.log('\nLimite de la ejecucion alcanzado.'); return; }
+              console.log(`\n--- ${pending} partido(s) en juego, siguiente sondeo en 3 min ---\n`);
+              await new Promise(r=>setTimeout(r,LOOP_MS));
+            }
+          }
+
+          loop().catch(e=>{console.error('Error fatal:',e.message||e);process.exit(1);});
           SCRIPT
