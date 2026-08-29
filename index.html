@@ -208,6 +208,11 @@
     const REMOTE_SYNC_MS = 3000;
     const REMOTE_POLL_MS = 30000; // Polling para ver cambios de otros usuarios
 
+    // Bote y pagos (editar aquí cada semana)
+    const BOTE = 4000;
+    const PAGADORES = ['diamante 4', 'diamante 5'];
+    const haPagado = (name) => PAGADORES.includes(String(name || '').trim().toLowerCase());
+
     // Fallback UUID para iOS < 15.4 y contextos no seguros donde crypto.randomUUID no existe
     const genId = () => {
       try {
@@ -1973,7 +1978,11 @@
                         className={`shrink-0 inline-block w-2.5 h-2.5 rounded-full ${lightClass}`}
                         title={lightTitle}
                       />
-                      <h3 className="participant-name font-bold text-base flex-1 min-w-0 break-words leading-tight">{p.name}</h3>
+                      <h3
+                        className="participant-name font-bold text-base flex-1 min-w-0 break-words leading-tight"
+                        style={haPagado(p.name) ? { color: '#bef264' } : undefined}
+                        title={haPagado(p.name) ? 'Porra pagada' : undefined}
+                      >{p.name}</h3>
                       {p.status === 'eliminated' && (
                         <span className="shrink-0 text-[9px] font-display font-semibold uppercase tracking-wider bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-full px-2 py-0.5">
                           Eliminado P{p.eliminatedAt}
@@ -2041,6 +2050,10 @@
                       <div className="flex items-baseline gap-2">
                         <span className="score-num text-xl text-rose-400">{outList.length}</span>
                         <span className="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-300/70">eliminados</span>
+                      </div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="score-num text-xl text-amber-300">{BOTE.toLocaleString('es-ES')} €</span>
+                        <span className="font-display text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-300/70">bote</span>
                       </div>
                       <span className="font-display text-[10px] uppercase tracking-[0.2em] text-slate-500">{totalCount} en juego</span>
                     </div>
