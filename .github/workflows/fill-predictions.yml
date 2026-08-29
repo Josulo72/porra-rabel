@@ -1,0 +1,85 @@
+name: Rellenar pronosticos pendientes
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rellenar participantes sin pronostico (excepto Gerard)
+        run: |
+          node --experimental-fetch - <<'SCRIPT'
+
+          const API = 'https://script.google.com/macros/s/AKfycbwIo68AUaC7Sd9eXKWGUWcCP6Be24j-9TmkHNEVKSmfOVIT5fQen3Kq5mqWlwLSyXq86w/exec';
+
+          // Josulo: mejor combo posible segun el analisis Poisson
+          // P1 Real Madrid-Malaga top 2-0 | P2 Barca-Rayo top 2-0 | P3 Ourense-Ponferradina top 1-1
+          const BEST = [[2,0],[2,0],[1,1]];
+
+          // Combos coherentes con la distribucion de probabilidad (uno por participante)
+          const POOL = [
+            [[2,0],[2,1],[0,0]],
+            [[3,0],[3,0],[0,1]],
+            [[1,0],[2,0],[1,1]],
+            [[4,0],[3,1],[1,0]],
+            [[2,1],[1,0],[0,2]],
+            [[3,1],[4,0],[1,2]],
+            [[2,0],[1,1],[2,1]],
+            [[3,0],[2,0],[2,0]],
+            [[1,1],[2,1],[0,1]],
+            [[4,1],[3,0],[0,0]],
+            [[2,0],[3,1],[1,1]],
+            [[5,0],[4,1],[1,0]],
+            [[0,0],[0,0],[2,2]],
+            [[3,2],[2,2],[0,3]],
+            [[1,0],[1,0],[1,2]],
+          ];
+
+          const norm = (s) => String(s || '').trim().toLowerCase();
+          const filled = (pr) => pr && Number.isInteger(pr.home) && Number.isInteger(pr.away);
+
+          async function main() {
+            const res = await fetch(API + '?action=getState');
+            const data = await res.json();
+            const participants = (data.state && data.state.participants) || [];
+            console.log('Participantes en servidor:', participants.length);
+
+            const pending = participants.filter((p) => {
+              if (norm(p.name) === 'gerard') return false;
+              const preds = p.predictions || [];
+              return ![0,1,2].every((i) => filled(preds[i]));
+            });
+            console.log('Pendientes de rellenar:', pending.map((p) => p.name).join(', ') || '(ninguno)');
+
+            let poolIdx = 0;
+            for (const p of pending) {
+              const combo = norm(p.name) === 'josulo' ? BEST : POOL[poolIdx++ % POOL.length];
+              const existing = p.predictions || [];
+              const predictions = [0,1,2].map((i) =>
+                filled(existing[i]) ? existing[i] : { home: combo[i][0], away: combo[i][1] }
+              );
+              const body = JSON.stringify({
+                action: 'updateParticipant',
+                participant: { id: p.id, name: p.name, predictions, locked: [true, true, true] },
+              });
+              const r = await fetch(API, { method: 'POST', body });
+              const out = await r.json().catch(() => ({}));
+              console.log(`${p.name}: ${predictions.map((pr) => pr.home + '-' + pr.away).join(' / ')} -> ${out.ok ? 'OK' : 'ERROR ' + JSON.stringify(out)}`);
+              await new Promise((ok) => setTimeout(ok, 800));
+            }
+
+            // Verificacion final
+            const res2 = await fetch(API + '?action=getState');
+            const data2 = await res2.json();
+            const still = (data2.state.participants || []).filter((p) => {
+              if (norm(p.name) === 'gerard') return false;
+              const preds = p.predictions || [];
+              return ![0,1,2].every((i) => filled(preds[i]));
+            });
+            console.log('Sin pronostico tras el proceso:', still.map((p) => p.name).join(', ') || '(ninguno)');
+            if (still.length) process.exit(1);
+          }
+
+          main().catch((e) => { console.error(e); process.exit(1); });
+          SCRIPT
