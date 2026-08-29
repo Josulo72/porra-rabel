@@ -1960,8 +1960,8 @@
                 }
                 // Entre vivos: con pronóstico completo primero
                 if (a.status === 'alive' && b.status === 'alive') {
-                  const aFull = a.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
-                  const bFull = b.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+                  const aFull = a.predictions.every((pr) => Number.isInteger(pr?.home) && Number.isInteger(pr?.away));
+                  const bFull = b.predictions.every((pr) => Number.isInteger(pr?.home) && Number.isInteger(pr?.away));
                   if (aFull && !bFull) return -1;
                   if (!aFull && bFull) return 1;
                 }
@@ -1974,7 +1974,7 @@
               const alivePct = totalCount ? Math.round((aliveList.length / totalCount) * 100) : 0;
 
               const renderCard = (p) => {
-                const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr.home) && Number.isInteger(pr.away));
+                const hasFullPrediction = p.predictions.every((pr) => Number.isInteger(pr?.home) && Number.isInteger(pr?.away));
                 const lightClass = p.status === 'eliminated'
                   ? 'bg-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.95)]'
                   : hasFullPrediction
@@ -2027,7 +2027,7 @@
                               : 'border-white/10 bg-white/[0.04] text-slate-300';
                           return (
                             <span key={i} className={`score-num text-[13px] rounded-lg px-2 py-1 text-center border leading-none ${chipClass}`}>
-                              {pr.home ?? '-'}-{pr.away ?? '-'}
+                              {pr?.home ?? '-'}-{pr?.away ?? '-'}
                               {hit && <span className="ml-1">✓</span>}
                               {miss && <span className="ml-1">✗</span>}
                             </span>
