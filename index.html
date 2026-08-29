@@ -305,7 +305,7 @@
       .replace(/\s+/g, ' ')
       .trim();
 
-    const isResultSet = (result) => Number.isInteger(result.home) && Number.isInteger(result.away);
+    const isResultSet = (result) => !!result && Number.isInteger(result.home) && Number.isInteger(result.away);
 
     const evaluateParticipant = (participant, matches) => {
       for (let i = 0; i < matches.length; i++) {
