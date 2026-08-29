@@ -206,6 +206,117 @@
     ::-webkit-scrollbar-thumb { background: rgba(163, 230, 53, 0.18); border-radius: 8px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(163, 230, 53, 0.32); }
 
+    /* ===== Intro: saque inicial ===== */
+    #intro {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(ellipse 90% 60% at 50% 110%, rgba(163, 230, 53, 0.08), transparent 60%),
+        linear-gradient(180deg, #030609 0%, #071310 55%, #0a2416 100%);
+      animation: introOut 0.6s cubic-bezier(0.22, 1, 0.36, 1) 2.05s both;
+      cursor: pointer;
+    }
+
+    /* Línea de medio campo: se pinta de lado a lado */
+    #intro::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 2px;
+      background: rgba(190, 242, 100, 0.35);
+      transform: scaleX(0);
+      animation: introLine 0.7s cubic-bezier(0.65, 0, 0.35, 1) 0.15s both;
+    }
+
+    @keyframes introLine {
+      from { transform: scaleX(0); }
+      to { transform: scaleX(1); }
+    }
+
+    /* Círculo central sobre la línea */
+    .intro-circle {
+      position: absolute;
+      width: min(46vw, 340px);
+      aspect-ratio: 1;
+      border: 2px solid rgba(190, 242, 100, 0.28);
+      border-radius: 50%;
+      transform: scale(0.55);
+      opacity: 0;
+      animation: introCircle 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.5s both;
+    }
+
+    @keyframes introCircle {
+      from { transform: scale(0.55); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    /* Wordmark: cada línea sube desde su máscara */
+    .intro-word {
+      position: relative;
+      text-align: center;
+      font-family: 'Archivo Black', Impact, sans-serif;
+      color: #f4fde6;
+      text-shadow: 0 3px 26px rgba(163, 230, 53, 0.35);
+      line-height: 1.06;
+      letter-spacing: 0.02em;
+      font-size: clamp(1.6rem, 6.4vw, 3.6rem);
+      text-transform: uppercase;
+    }
+
+    .intro-word span {
+      display: block;
+      overflow: hidden;
+    }
+
+    .intro-word span i {
+      display: block;
+      font-style: normal;
+      transform: translateY(112%);
+      animation: introWord 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .intro-word span:nth-child(1) i { animation-delay: 0.75s; }
+    .intro-word span:nth-child(2) i { animation-delay: 0.87s; color: #bef264; }
+
+    @keyframes introWord {
+      from { transform: translateY(112%); }
+      to { transform: translateY(0); }
+    }
+
+    .intro-tag {
+      display: block;
+      margin-top: 0.9rem;
+      font-family: 'Oswald', 'Arial Narrow', sans-serif;
+      font-size: clamp(0.62rem, 1.7vw, 0.8rem);
+      font-weight: 600;
+      letter-spacing: 0.34em;
+      color: rgba(190, 242, 100, 0.75);
+      text-transform: uppercase;
+      opacity: 0;
+      animation: introTag 0.5s ease-out 1.25s both;
+    }
+
+    @keyframes introTag {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Salida: el estadio abre el telón */
+    @keyframes introOut {
+      from { opacity: 1; transform: scale(1); }
+      to { opacity: 0; transform: scale(1.04); visibility: hidden; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #intro { display: none; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         animation-duration: 0.01ms !important;
@@ -217,6 +328,26 @@
 </head>
 
 <body class="font-inter text-slate-100 min-h-screen">
+  <!-- Intro "saque inicial" — capa aislada, no toca React ni la API -->
+  <div id="intro" aria-hidden="true">
+    <div class="intro-circle"></div>
+    <div class="intro-word">
+      <span><i>La Porra</i></span>
+      <span><i>de Supervivencia</i></span>
+      <span class="intro-tag">Muerte súbita · 3 partidos</span>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var intro = document.getElementById('intro');
+      if (!intro) return;
+      var kill = function () { if (intro.parentNode) intro.parentNode.removeChild(intro); };
+      intro.addEventListener('click', kill);
+      intro.addEventListener('animationend', function (e) { if (e.target === intro) kill(); });
+      setTimeout(kill, 3400); // red de seguridad
+    })();
+  </script>
+
   <div id="root" class="max-w-7xl mx-auto px-4 py-6 md:py-10"></div>
 
   <script type="text/babel">
