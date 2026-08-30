@@ -442,8 +442,12 @@
       for (let i = 0; i < matches.length; i++) {
         const match = matches[i];
         if (!isResultSet(match.result)) {
-          // Partido sin resultado aún — seguimos evaluando en orden
-          return { status: 'alive', eliminatedAt: null };
+          // Partido sin resultado aún: se salta y se sigue con los demás.
+          // Aquí había un return, y por eso no salía nadie eliminado: los
+          // partidos no se juegan en el orden de la lista (el 3 se jugó antes
+          // que el 1), así que el primer partido sin resultado cortaba la
+          // evaluación entera. Code.gs:206 ya hacía continue.
+          continue;
         }
         const pred = participant.predictions?.[i];
         // Si no tiene predicción (null) para un partido con resultado → eliminado
