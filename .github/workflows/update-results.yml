@@ -20,7 +20,11 @@ concurrency:
 jobs:
   update-results:
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # Un partido dura ~2h desde el pitido inicial y GitHub descarta casi todas
+    # las ejecuciones del cron '*/5'. Con 70 min una ejecucion que arrancaba
+    # antes del kickoff se apagaba en pleno segundo tiempo. El bucle sale solo
+    # en cuanto no hay nada en juego, asi que esto no consume minutos de mas.
+    timeout-minutes: 200
     steps:
       - name: Fetch and update match results
         run: |
@@ -238,9 +242,22 @@ jobs:
           async function main(){
             console.log('=== Actualizacion automatica de resultados ===');
             console.log('Hora UTC:',new Date().toISOString());
-            const stateRes=await fetch(APPS_SCRIPT_URL+'?action=getState');
-            const stateData=await stateRes.json();
-            if(!stateData.ok||!stateData.state){console.log('ERROR:',JSON.stringify(stateData));process.exit(1);}
+            // Apps Script devuelve de vez en cuando una pagina HTML de error en
+            // lugar del JSON. Tres intentos antes de dar el ciclo por perdido.
+            let stateData=null,lastErr='';
+            for(let i=0;i<3;i++){
+              try{
+                const stateRes=await fetch(APPS_SCRIPT_URL+'?action=getState',{signal:AbortSignal.timeout(20000)});
+                const txt=await stateRes.text();
+                stateData=JSON.parse(txt);
+                if(stateData&&stateData.ok&&stateData.state)break;
+                lastErr='respuesta sin state: '+txt.slice(0,120);
+                stateData=null;
+              }catch(e){lastErr=e.message||String(e);stateData=null;}
+              console.log(`  getState intento ${i+1} fallido: ${lastErr}`);
+              if(i<2)await new Promise(r=>setTimeout(r,5000));
+            }
+            if(!stateData)throw new Error('getState: '+lastErr);
             const state=stateData.state;
             const matches=state.matches||[];
             console.log('Partidos:',matches.length);
@@ -308,12 +325,26 @@ jobs:
           // salta ~1 cada 6-12h). Por eso cada ejecucion sondea durante ~55 min en
           // vez de una sola vez: asi cubre el hueco entre lanzamientos.
           const LOOP_MS=3*60*1000;
-          const DEADLINE=Date.now()+55*60*1000;
+          const RETRY_MS=60*1000;
+          const DEADLINE=Date.now()+190*60*1000;
           async function loop(){
+            let errors=0;
             while(true){
-              let pending=0;
+              let pending=0,failed=false;
               try{ pending=await main(); }
-              catch(e){ console.error('Error en ciclo:',e.message||e); }
+              catch(e){ failed=true; errors++; console.error(`Error en ciclo (${errors}):`,e.message||e); }
+              // Un fallo puntual de Apps Script (devuelve HTML de error) dejaba
+              // pending=0 y mataba la ejecucion entera. El 30/08 el bucle murio
+              // 11 min antes del Madrid-Malaga y el partido se quedo sin
+              // marcador, sin minuto y sin goles toda la tarde. Ahora reintenta.
+              if(failed){
+                if(errors>=15){ console.log('\nDemasiados errores seguidos: fin de la ejecucion.'); return; }
+                if(Date.now()+RETRY_MS>DEADLINE){ console.log('\nLimite de la ejecucion alcanzado.'); return; }
+                console.log(`\n--- Reintento en 1 min ---\n`);
+                await new Promise(r=>setTimeout(r,RETRY_MS));
+                continue;
+              }
+              errors=0;
               if(!pending){ console.log('\nNada en juego: fin de la ejecucion.'); return; }
               if(Date.now()+LOOP_MS>DEADLINE){ console.log('\nLimite de la ejecucion alcanzado.'); return; }
               console.log(`\n--- ${pending} partido(s) en juego, siguiente sondeo en 3 min ---\n`);

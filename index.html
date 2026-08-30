@@ -438,11 +438,25 @@
 
     const isResultSet = (result) => !!result && Number.isInteger(result.home) && Number.isInteger(result.away);
 
+    // Un marcador solo sirve para eliminar cuando el partido ha TERMINADO. El
+    // workflow y el scraping escriben el marcador parcial en match.result
+    // mientras se juega, y con eso se eliminaba gente en el minuto 20 por un
+    // 1-0 provisional (y se la "resucitaba" al siguiente gol).
+    const isMatchFinalized = (match) => {
+      if (!isResultSet(match.result)) return false;
+      const phase = match.live && match.live.phase;
+      if (phase === 'post') return true;
+      if (phase === 'in' || phase === 'pre') return false;
+      if (!match.kickoff) return true; // resultado a mano, sin hora: se acepta
+      // Sin datos de fase, 90' + descanso + añadido desde el pitido inicial.
+      return Date.now() - new Date(match.kickoff).getTime() > 140 * 60 * 1000;
+    };
+
     const evaluateParticipant = (participant, matches) => {
       for (let i = 0; i < matches.length; i++) {
         const match = matches[i];
-        if (!isResultSet(match.result)) {
-          // Partido sin resultado aún: se salta y se sigue con los demás.
+        if (!isMatchFinalized(match)) {
+          // Partido sin resultado final aún: se salta y se sigue con los demás.
           // Aquí había un return, y por eso no salía nadie eliminado: los
           // partidos no se juegan en el orden de la lista (el 3 se jugó antes
           // que el 1), así que el primer partido sin resultado cortaba la
